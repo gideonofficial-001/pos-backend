@@ -1,0 +1,379 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== ENUMS ====================
+
+enum UserRole {
+  SUPER_ADMIN
+  OVERALL_MANAGER
+  BRANCH_MANAGER
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum ProductType {
+  LPG_REFILL
+  LPG_CYLINDER
+  ELECTRONICS
+  ACCESSORIES
+}
+
+enum SaleType {
+  CASH
+  INVOICE
+}
+
+enum SaleStatus {
+  PENDING
+  COMPLETED
+  RETURNED
+  CANCELLED
+}
+
+enum InvoiceStatus {
+  PENDING
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum ReturnStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PROCESSED
+}
+
+enum DeviceStatus {
+  PENDING
+  APPROVED
+  REVOKED
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  SALE_CREATED
+  SALE_COMPLETED
+  SALE_RETURNED
+  INVOICE_CREATED
+  INVOICE_PAID
+  STOCK_ADJUSTED
+  STOCK_RESTOCKED
+  DEVICE_REGISTERED
+  DEVICE_APPROVED
+  USER_CREATED
+  USER_UPDATED
+  USER_DELETED
+  PRODUCT_CREATED
+  PRODUCT_UPDATED
+  BRANCH_CREATED
+  BRANCH_UPDATED
+}
+
+// ==================== MODELS ====================
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  firstName String
+  lastName  String
+  phone     String?
+  role      UserRole
+  status    UserStatus @default(ACTIVE)
+  
+  branchId  String?
+  branch    Branch?  @relation(fields: [branchId], references: [id])
+  
+  devices   Device[]
+  
+  sales         Sale[]
+  invoices      Invoice[]
+  returns       Return[]
+  auditLogs     AuditLog[]
+  approvedDevices Device[] @relation("ApprovedBy")
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@map("users")
+}
+
+model Device {
+  id           String       @id @default(uuid())
+  userId       String
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  fingerprint  String       @unique
+  deviceInfo   String
+  ipAddress    String
+  status       DeviceStatus @default(PENDING)
+  
+  approvedById String?
+  approvedBy   User?        @relation("ApprovedBy", fields: [approvedById], references: [id])
+  approvedAt   DateTime?
+  
+  lastUsedAt   DateTime     @default(now())
+  createdAt    DateTime     @default(now())
+  
+  @@map("devices")
+}
+
+model Branch {
+  id          String @id @default(uuid())
+  name        String
+  code        String @unique
+  address     String
+  phone       String
+  email       String?
+  
+  users       User[]
+  inventory   Inventory[]
+  sales       Sale[]
+  invoices    Invoice[]
+  
+  isActive    Boolean @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@map("branches")
+}
+
+model Product {
+  id          String      @id @default(uuid())
+  name        String
+  code        String      @unique
+  description String?
+  type        ProductType
+  
+  price       Decimal     @db.Decimal(10, 2)
+  costPrice   Decimal?    @db.Decimal(10, 2)
+  
+  cylinderSize String?
+  brand       String?
+  
+  minStockLevel Int       @default(10)
+  
+  inventory   Inventory[]
+  saleItems   SaleItem[]
+  
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  @@map("products")
+}
+
+model Inventory {
+  id        String   @id @default(uuid())
+  
+  branchId  String
+  branch    Branch   @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  quantity      Int      @default(0)
+  fullCylinders Int?
+  emptyCylinders Int?
+  
+  totalRefilled Int      @default(0)
+  totalSold     Int      @default(0)
+  
+  lastRestocked DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@unique([branchId, productId])
+  @@map("inventory")
+}
+
+model Sale {
+  id          String     @id @default(uuid())
+  saleCode    String     @unique
+  
+  branchId    String
+  branch      Branch     @relation(fields: [branchId], references: [id])
+  
+  userId      String
+  user        User       @relation(fields: [userId], references: [id])
+  
+  type        SaleType
+  status      SaleStatus @default(COMPLETED)
+  
+  customerName    String?
+  customerPhone   String?
+  
+  subtotal    Decimal    @db.Decimal(10, 2)
+  tax         Decimal    @db.Decimal(10, 2) @default(0)
+  discount    Decimal    @db.Decimal(10, 2) @default(0)
+  total       Decimal    @db.Decimal(10, 2)
+  
+  invoiceId   String?
+  invoice     Invoice?   @relation(fields: [invoiceId], references: [id])
+  
+  saleDate    DateTime   @default(now())
+  
+  items       SaleItem[]
+  returns     Return[]
+  
+  notes       String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  @@map("sales")
+}
+
+model SaleItem {
+  id        String   @id @default(uuid())
+  
+  saleId    String
+  sale      Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  
+  quantity  Int
+  unitPrice Decimal  @db.Decimal(10, 2)
+  total     Decimal  @db.Decimal(10, 2)
+  
+  isRefill  Boolean  @default(false)
+  
+  createdAt DateTime @default(now())
+  
+  @@map("sale_items")
+}
+
+model Invoice {
+  id          String        @id @default(uuid())
+  invoiceCode String        @unique
+  
+  branchId    String
+  branch      Branch        @relation(fields: [branchId], references: [id])
+  
+  userId      String
+  user        User          @relation(fields: [userId], references: [id])
+  
+  customerName    String
+  customerPhone   String
+  customerEmail   String?
+  
+  amount      Decimal       @db.Decimal(10, 2)
+  status      InvoiceStatus @default(PENDING)
+  dueDate     DateTime
+  
+  smsSent     Boolean       @default(false)
+  smsSentAt   DateTime?
+  
+  sale        Sale?
+  
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  @@map("invoices")
+}
+
+model Return {
+  id          String       @id @default(uuid())
+  returnCode  String       @unique
+  
+  saleId      String
+  sale        Sale         @relation(fields: [saleId], references: [id])
+  
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  
+  reason      String
+  amount      Decimal      @db.Decimal(10, 2)
+  status      ReturnStatus @default(PENDING)
+  
+  approvedById String?
+  approvedAt   DateTime?
+  rejectionReason String?
+  
+  stockReversed Boolean   @default(false)
+  
+  notes       String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  @@map("returns")
+}
+
+model AuditLog {
+  id          String      @id @default(uuid())
+  
+  userId      String?
+  user        User?       @relation(fields: [userId], references: [id])
+  
+  action      AuditAction
+  entityType  String
+  entityId    String?
+  
+  oldValues   Json?
+  newValues   Json?
+  description String
+  
+  ipAddress   String?
+  userAgent   String?
+  
+  createdAt   DateTime    @default(now())
+  
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model StockAdjustment {
+  id          String   @id @default(uuid())
+  
+  inventoryId String
+  inventory   Inventory @relation(fields: [inventoryId], references: [id])
+  
+  type        String
+  quantity    Int
+  reason      String
+  
+  performedBy String
+  performedAt DateTime @default(now())
+  
+  notes       String?
+  createdAt   DateTime @default(now())
+  
+  @@map("stock_adjustments")
+}
+
+model DailySalesSummary {
+  id          String   @id @default(uuid())
+  
+  date        DateTime @unique
+  branchId    String?
+  
+  totalSales  Int
+  totalAmount Decimal  @db.Decimal(10, 2)
+  cashSales   Int
+  invoiceSales Int
+  
+  lpgRefills  Int
+  lpgCylinders Int
+  electronics  Int
+  
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+  
+  @@map("daily_sales_summaries")
+}

@@ -1,0 +1,16 @@
+node_modules
+npm-debug.log
+yarn-error.log
+dist
+coverage
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+.vscode
+.idea
+*.swp
+*.swo
+*~
+prisma/migrations

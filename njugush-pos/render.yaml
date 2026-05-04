@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: njugush-pos-api
+    runtime: docker
+    repo: https://github.com/njugush-enterprises/njugush-pos
+    branch: main
+    dockerfilePath: ./backend/Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: njugush-pos-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRATION
+        value: 24h
+      - key: NODE_ENV
+        value: production
+      - key: FRONTEND_URL
+        value: https://pos.njugush.co.ke
+      - key: CEO_PHONE
+        value: +254700000000
+      - key: CEO_EMAIL
+        value: ceo@njugush.co.ke
+    healthCheckPath: /api/health
+    autoDeploy: true
+
+databases:
+  - name: njugush-pos-db
+    databaseName: njugush_pos
+    user: njugush
+    plan: starter
+    ipAllowList: []
