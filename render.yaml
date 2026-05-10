@@ -2,7 +2,7 @@ services:
   - type: web
     name: njugush-pos-api
     runtime: docker
-    repo: https://github.com/njugush-enterprises/njugush-pos
+    repo: https://github.com/gideonofficial-001/pos-backend  # ← fix this
     branch: main
     dockerfilePath: ./backend/Dockerfile
     envVars:
@@ -17,7 +17,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: FRONTEND_URL
-        value: https://pos.njugush.co.ke
+        value: https://njugush-ent.vercel.app  # ← fix this
       - key: CEO_PHONE
         value: +254796928551
       - key: CEO_EMAIL
