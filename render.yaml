@@ -19,7 +19,7 @@ services:
       - key: FRONTEND_URL
         value: https://pos.njugush.co.ke
       - key: CEO_PHONE
-        value: +254700000000
+        value: +254796928551
       - key: CEO_EMAIL
         value: ceo@njugush.co.ke
     healthCheckPath: /api/health
