@@ -46,17 +46,20 @@ export class AuthService {
       throw new ForbiddenException('Account is not active');
     }
 
-    const deviceCheck = await this.devicesService.validateDevice(user.id, deviceFingerprint);
+    // Auto-approve SUPER_ADMIN devices — skip device check
+    if (user.role !== 'SUPER_ADMIN') {
+      const deviceCheck = await this.devicesService.validateDevice(user.id, deviceFingerprint);
 
-    if (!deviceCheck.isAuthorized) {
-      return {
-        requiresDeviceAuth: true,
-        message: 'Device authorization required',
-        deviceRequestId: deviceCheck.deviceRequestId,
-      };
+      if (!deviceCheck.isAuthorized) {
+        return {
+          requiresDeviceAuth: true,
+          message: 'Device authorization required',
+          deviceRequestId: deviceCheck.deviceRequestId,
+        };
+      }
+
+      await this.devicesService.updateLastUsed(deviceFingerprint);
     }
-
-    await this.devicesService.updateLastUsed(deviceFingerprint);
 
     const payload = { sub: user.id, email: user.email, role: user.role, branchId: user.branchId };
     const token = this.jwtService.sign(payload);
