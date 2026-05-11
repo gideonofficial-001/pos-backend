@@ -1,154 +1,83 @@
-import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { ConfigService } from '@nestjs/config';
-import * as bcrypt from 'bcrypt';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { DevicesService } from '../devices/devices.service';
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { LoginDto } from './dto/login.dto';
-import { RequestDeviceCodeDto } from './dto/request-device-code.dto';
-import { VerifyDeviceCodeDto } from './dto/verify-device-code.dto';
+import { AuditAction, Prisma } from '@prisma/client';
 
 @Injectable()
-export class AuthService {
-  constructor(
-    private prisma: PrismaService,
-    private jwtService: JwtService,
-    private configService: ConfigService,
-    private devicesService: DevicesService,
-    private auditLogsService: AuditLogsService,
-  ) {}
+export class AuditLogsService {
+  constructor(private prisma: PrismaService) {}
 
-  async login(loginDto: LoginDto, deviceInfo: any) {
-    const { email, password, deviceFingerprint } = loginDto;
-
-    const user = await this.prisma.user.findUnique({
-      where: { email },
-      include: { branch: true },
+  async create(data: {
+    userId?: string;
+    action: AuditAction;
+    entityType?: string;
+    entityId?: string;
+    oldValues?: any;
+    newValues?: any;
+    description: string;
+    ipAddress?: string;
+    userAgent?: string;
+  }) {
+    return this.prisma.auditLog.create({
+      data: { ...data, createdAt: new Date() } as Prisma.AuditLogUncheckedCreateInput
     });
+  }
 
-    if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
+  async findAll(query: {
+    userId?: string;
+    action?: AuditAction;
+    entityType?: string;
+    startDate?: string;
+    endDate?: string;
+    page?: number | string;
+    limit?: number | string;
+  }) {
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 50;
+    const { userId, action, entityType, startDate, endDate } = query;
+
+    const where: Prisma.AuditLogWhereInput = {};
+
+    if (userId) where.userId = userId;
+    if (action) where.action = action;
+    if (entityType) where.entityType = entityType;
+
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) where.createdAt.gte = new Date(startDate);
+      if (endDate) where.createdAt.lte = new Date(endDate);
     }
 
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      await this.auditLogsService.create({
-        action: 'LOGIN',
-        description: `Failed login attempt for ${email}`,
-        ipAddress: deviceInfo.ipAddress,
-        userAgent: deviceInfo.userAgent,
-      });
-      throw new UnauthorizedException('Invalid credentials');
-    }
+    const skip = (page - 1) * limit;
 
-    if (user.status !== 'ACTIVE') {
-      throw new ForbiddenException('Account is not active');
-    }
-
-    // Auto-approve SUPER_ADMIN devices — skip device check
-    if (user.role !== 'SUPER_ADMIN') {
-      const deviceCheck = await this.devicesService.validateDevice(user.id, deviceFingerprint);
-
-      if (!deviceCheck.isAuthorized) {
-        return {
-          requiresDeviceAuth: true,
-          message: 'Device authorization required',
-          deviceRequestId: deviceCheck.deviceRequestId,
-        };
-      }
-
-      await this.devicesService.updateLastUsed(deviceFingerprint);
-    }
-
-    const payload = { sub: user.id, email: user.email, role: user.role, branchId: user.branchId };
-    const token = this.jwtService.sign(payload);
-
-    await this.auditLogsService.create({
-      userId: user.id,
-      action: 'LOGIN',
-      description: `User ${email} logged in successfully`,
-      ipAddress: deviceInfo.ipAddress,
-      userAgent: deviceInfo.userAgent,
-    });
+    const [logs, total] = await Promise.all([
+      this.prisma.auditLog.findMany({
+        where,
+        include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.auditLog.count({ where }),
+    ]);
 
     return {
-      access_token: token,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        branch: user.branch,
-      },
+      data: logs,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     };
   }
 
-  async requestDeviceCode(requestDto: RequestDeviceCodeDto, deviceInfo: any) {
-    const { email, deviceFingerprint } = requestDto;
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
-
-    const result = await this.devicesService.requestAuthorization(user.id, deviceFingerprint, deviceInfo);
-
-    return {
-      message: 'Device authorization requested. Please contact admin/manager for approval.',
-      requestId: result.requestId,
-    };
+  async findByUser(userId: string) {
+    return this.prisma.auditLog.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
   }
 
-  async verifyDeviceCode(verifyDto: VerifyDeviceCodeDto, deviceInfo: any) {
-    const { requestId, authorizationCode } = verifyDto;
-    const result = await this.devicesService.verifyAuthorizationCode(requestId, authorizationCode);
-
-    if (!result.valid) {
-      throw new BadRequestException('Invalid or expired authorization code');
-    }
-
-    const user = await this.prisma.user.findUnique({
-      where: { id: result.userId },
-      include: { branch: true },
+  async findByEntity(entityType: string, entityId: string) {
+    return this.prisma.auditLog.findMany({
+      where: { entityType, entityId },
+      orderBy: { createdAt: 'desc' },
     });
-
-    const payload = { sub: user.id, email: user.email, role: user.role, branchId: user.branchId };
-    const token = this.jwtService.sign(payload);
-
-    await this.auditLogsService.create({
-      userId: user.id,
-      action: 'DEVICE_APPROVED',
-      description: 'New device approved and user logged in',
-      ipAddress: deviceInfo.ipAddress,
-      userAgent: deviceInfo.userAgent,
-    });
-
-    return {
-      access_token: token,
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role,
-        branch: user.branch,
-      },
-    };
-  }
-
-  async logout(userId: string, deviceInfo: any) {
-    await this.auditLogsService.create({
-      userId,
-      action: 'LOGOUT',
-      description: 'User logged out',
-      ipAddress: deviceInfo.ipAddress,
-      userAgent: deviceInfo.userAgent,
-    });
-    return { message: 'Logged out successfully' };
-  }
-
-  async validateUser(userId: string) {
-    return this.prisma.user.findUnique({ where: { id: userId }, include: { branch: true } });
   }
 }
