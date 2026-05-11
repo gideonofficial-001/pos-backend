@@ -35,6 +35,7 @@ export class AuthService {
     if (!isPasswordValid) {
       await this.auditLogsService.create({
         action: 'LOGIN',
+        entityType: 'USER',
         description: `Failed login attempt for ${email}`,
         ipAddress: deviceInfo.ipAddress,
         userAgent: deviceInfo.userAgent,
@@ -67,6 +68,7 @@ export class AuthService {
     await this.auditLogsService.create({
       userId: user.id,
       action: 'LOGIN',
+      entityType: 'USER',
       description: `User ${email} logged in successfully`,
       ipAddress: deviceInfo.ipAddress,
       userAgent: deviceInfo.userAgent,
@@ -119,6 +121,7 @@ export class AuthService {
     await this.auditLogsService.create({
       userId: user.id,
       action: 'DEVICE_APPROVED',
+      entityType: 'USER',
       description: 'New device approved and user logged in',
       ipAddress: deviceInfo.ipAddress,
       userAgent: deviceInfo.userAgent,
@@ -141,6 +144,7 @@ export class AuthService {
     await this.auditLogsService.create({
       userId,
       action: 'LOGOUT',
+      entityType: 'USER',
       description: 'User logged out',
       ipAddress: deviceInfo.ipAddress,
       userAgent: deviceInfo.userAgent,
