@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { DeviceStatus } from '@prisma/client';
+import * as nodemailer from 'nodemailer';
 
 @Injectable()
 export class DevicesService {
@@ -10,19 +11,23 @@ export class DevicesService {
     private auditLogsService: AuditLogsService,
   ) {}
 
+  private getMailTransporter() {
+    return nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+      },
+    });
+  }
+
   async validateDevice(userId: string, fingerprint: string) {
     const device = await this.prisma.device.findUnique({
       where: { fingerprint },
     });
 
-    if (!device) {
-      return { isAuthorized: false };
-    }
-
-    if (device.userId !== userId) {
-      return { isAuthorized: false };
-    }
-
+    if (!device) return { isAuthorized: false };
+    if (device.userId !== userId) return { isAuthorized: false };
     if (device.status !== 'APPROVED') {
       return { isAuthorized: false, deviceRequestId: device.id };
     }
@@ -65,13 +70,13 @@ export class DevicesService {
   async generateAuthorizationCode(deviceId: string, approvedById: string) {
     const device = await this.prisma.device.findUnique({
       where: { id: deviceId },
+      include: { user: true },
     });
 
-    if (!device) {
-      throw new NotFoundException('Device not found');
-    }
+    if (!device) throw new NotFoundException('Device not found');
 
     const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
 
     await this.prisma.device.update({
       where: { id: deviceId },
@@ -79,8 +84,29 @@ export class DevicesService {
         status: DeviceStatus.APPROVED,
         approvedById,
         approvedAt: new Date(),
+        authCode: code,
+        authCodeExpiry: expiry,
       },
     });
+
+    // Send code via email
+    try {
+      const transporter = this.getMailTransporter();
+      await transporter.sendMail({
+        from: `"Njugush POS" <${process.env.EMAIL_USER}>`,
+        to: device.user.email,
+        subject: 'Device Authorization Code - Njugush POS',
+        html: `
+          <h2>Device Authorization</h2>
+          <p>Your device has been approved. Use the code below to complete login:</p>
+          <h1 style="letter-spacing:8px;color:#2563eb;">${code}</h1>
+          <p>This code expires in <strong>30 minutes</strong>.</p>
+          <p>If you did not request this, contact your administrator.</p>
+        `,
+      });
+    } catch (err) {
+      console.error('Failed to send auth code email:', err.message);
+    }
 
     await this.auditLogsService.create({
       userId: approvedById,
@@ -90,7 +116,7 @@ export class DevicesService {
       entityId: deviceId,
     });
 
-    return { code };
+    return { code, message: 'Device approved and code sent to user email' };
   }
 
   async verifyAuthorizationCode(requestId: string, code: string) {
@@ -98,9 +124,17 @@ export class DevicesService {
       where: { id: requestId },
     });
 
-    if (!device || device.status !== 'APPROVED') {
+    if (!device || device.status !== 'APPROVED') return { valid: false };
+    if (!device.authCode || device.authCode !== code) return { valid: false };
+    if (device.authCodeExpiry && device.authCodeExpiry < new Date()) {
       return { valid: false };
     }
+
+    // Clear the code after successful use
+    await this.prisma.device.update({
+      where: { id: requestId },
+      data: { authCode: null, authCodeExpiry: null },
+    });
 
     return { valid: true, userId: device.userId };
   }
@@ -118,12 +152,8 @@ export class DevicesService {
       include: {
         user: {
           select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            role: true,
-            branch: true,
+            id: true, firstName: true, lastName: true,
+            email: true, role: true, branch: true,
           },
         },
       },
