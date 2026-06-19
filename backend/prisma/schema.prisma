@@ -501,8 +501,9 @@ model Transfer {
   initiatedBy String
   initiator   User   @relation("InitiatedBy", fields: [initiatedBy], references: [id])
 
-  approvedById String?
-  approvedBy   User?   @relation("TransferApprovedBy", fields: [TransferApprovedById], references: [id])
+    approvedById String?
+  approvedBy   User?   @relation("TransferApprovedBy", fields: [approvedById], references: [id])
+
 
   status          TransferStatus @default(PENDING)
   notes           String?
