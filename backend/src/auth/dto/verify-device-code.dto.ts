@@ -1,10 +1,14 @@
-import { IsString, IsNotEmpty, IsUUID } from 'class-validator';
+import { IsNotEmpty, IsString } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class VerifyDeviceCodeDto {
-  @IsUUID()
+  @ApiProperty({ example: 'device-request-id' })
+  @IsNotEmpty({ message: 'Request ID is required' })
+  @IsString()
   requestId: string;
 
+  @ApiProperty({ example: '123456' })
+  @IsNotEmpty({ message: 'Authorization code is required' })
   @IsString()
-  @IsNotEmpty()
   authorizationCode: string;
 }

@@ -1,38 +1,60 @@
-import { IsString, IsNotEmpty, IsEnum, IsOptional, IsArray, ValidateNested } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, IsEnum, IsNumber, IsArray, ValidateNested, Min } from 'class-validator';
 import { Type } from 'class-transformer';
+import { ApiProperty } from '@nestjs/swagger';
 import { SaleType } from '@prisma/client';
 
 class SaleItemDto {
-  @IsString()
+  @ApiProperty()
   @IsNotEmpty()
+  @IsString()
   productId: string;
 
+  @ApiProperty()
   @IsNotEmpty()
+  @IsNumber()
+  @Min(1, { message: 'Quantity must be at least 1' })
   quantity: number;
 }
 
 export class CreateSaleDto {
+  @ApiProperty()
+  @IsNotEmpty({ message: 'Branch ID is required' })
   @IsString()
-  @IsNotEmpty()
   branchId: string;
 
-  @IsEnum(SaleType)
+  @ApiProperty({ enum: SaleType })
+  @IsEnum(SaleType, { message: 'Sale type must be CASH or INVOICE' })
+  @IsNotEmpty()
   type: SaleType;
 
-  @IsString()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
+  customerId?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
   customerName?: string;
 
-  @IsString()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
   customerPhone?: string;
 
-  @IsArray()
+  @ApiProperty({ type: [SaleItemDto] })
+  @IsArray({ message: 'Items array is required' })
   @ValidateNested({ each: true })
   @Type(() => SaleItemDto)
   items: SaleItemDto[];
 
-  @IsString()
+  @ApiProperty({ required: false, default: 0 })
   @IsOptional()
+  @IsNumber()
+  discount?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
   notes?: string;
 }

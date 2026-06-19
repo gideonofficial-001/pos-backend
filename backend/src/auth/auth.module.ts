@@ -13,10 +13,10 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: async (configService: ConfigService) => ({
-        secret: configService.get<string>('JWT_SECRET'),
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get('JWT_SECRET') || 'njugush-pos-secret-key-2024',
         signOptions: {
-          expiresIn: configService.get<string>('JWT_EXPIRATION', '24h'),
+          expiresIn: configService.get('JWT_EXPIRES_IN') || '24h',
         },
       }),
       inject: [ConfigService],

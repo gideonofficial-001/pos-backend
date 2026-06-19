@@ -4,90 +4,74 @@ import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main() {
-  console.log('Starting database seed...');
+  console.log('Starting Njugush POS database seed...');
 
-  // Create branches (7 branches for Njugush Enterprises)
+  // Create branches
   const branches = await Promise.all([
     prisma.branch.upsert({
       where: { code: 'HQ' },
       update: {},
-      create: {
-        name: 'Headquarters',
-        code: 'HQ',
-        address: 'Main Street, Nairobi',
-        phone: '+254700000001',
-        email: 'hq@njugush.co.ke',
-      },
+      create: { name: 'Headquarters', code: 'HQ', address: 'Main Street, Nairobi', phone: '+254700000001', email: 'hq@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR01' },
       update: {},
-      create: {
-        name: 'Branch 1 - Westlands',
-        code: 'BR01',
-        address: 'Westlands, Nairobi',
-        phone: '+254700000002',
-        email: 'westlands@njugush.co.ke',
-      },
+      create: { name: 'Branch 1 - Westlands', code: 'BR01', address: 'Westlands, Nairobi', phone: '+254700000002', email: 'westlands@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR02' },
       update: {},
-      create: {
-        name: 'Branch 2 - Eastleigh',
-        code: 'BR02',
-        address: 'Eastleigh, Nairobi',
-        phone: '+254700000003',
-        email: 'eastleigh@njugush.co.ke',
-      },
+      create: { name: 'Branch 2 - Eastleigh', code: 'BR02', address: 'Eastleigh, Nairobi', phone: '+254700000003', email: 'eastleigh@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR03' },
       update: {},
-      create: {
-        name: 'Branch 3 - Karen',
-        code: 'BR03',
-        address: 'Karen, Nairobi',
-        phone: '+254700000004',
-        email: 'karen@njugush.co.ke',
-      },
+      create: { name: 'Branch 3 - Karen', code: 'BR03', address: 'Karen, Nairobi', phone: '+254700000004', email: 'karen@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR04' },
       update: {},
-      create: {
-        name: 'Branch 4 - Ngong Road',
-        code: 'BR04',
-        address: 'Ngong Road, Nairobi',
-        phone: '+254700000005',
-        email: 'ngong@njugush.co.ke',
-      },
+      create: { name: 'Branch 4 - Ngong Road', code: 'BR04', address: 'Ngong Road, Nairobi', phone: '+254700000005', email: 'ngong@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR05' },
       update: {},
-      create: {
-        name: 'Branch 5 - Mombasa Road',
-        code: 'BR05',
-        address: 'Mombasa Road, Nairobi',
-        phone: '+254700000006',
-        email: 'mombasaroad@njugush.co.ke',
-      },
+      create: { name: 'Branch 5 - Mombasa Road', code: 'BR05', address: 'Mombasa Road, Nairobi', phone: '+254700000006', email: 'mombasaroad@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR06' },
       update: {},
-      create: {
-        name: 'Branch 6 - Thika Road',
-        code: 'BR06',
-        address: 'Thika Road, Nairobi',
-        phone: '+254700000007',
-        email: 'thikaroad@njugush.co.ke',
-      },
+      create: { name: 'Branch 6 - Thika Road', code: 'BR06', address: 'Thika Road, Nairobi', phone: '+254700000007', email: 'thikaroad@njugush.co.ke' },
     }),
   ]);
 
   console.log(`Created ${branches.length} branches`);
+
+  // Create product categories
+  const categories = await Promise.all([
+    prisma.productCategory.upsert({
+      where: { name: '6kg LPG' },
+      update: {},
+      create: { name: '6kg LPG', description: '6kg gas cylinder products' },
+    }),
+    prisma.productCategory.upsert({
+      where: { name: '13kg LPG' },
+      update: {},
+      create: { name: '13kg LPG', description: '13kg gas cylinder products' },
+    }),
+    prisma.productCategory.upsert({
+      where: { name: '45kg LPG' },
+      update: {},
+      create: { name: '45kg LPG', description: '45kg commercial gas products' },
+    }),
+    prisma.productCategory.upsert({
+      where: { name: 'Accessories' },
+      update: {},
+      create: { name: 'Accessories', description: 'Gas accessories and equipment' },
+    }),
+  ]);
+
+  console.log(`Created ${categories.length} product categories`);
 
   // Create Super Admin (CEO)
   const hashedPassword = await bcrypt.hash('admin123', 10);
@@ -100,7 +84,7 @@ async function main() {
       password: hashedPassword,
       firstName: 'Njugush',
       lastName: 'CEO',
-      phone: '+254700000000',
+      phone: '+254727202653',
       role: UserRole.SUPER_ADMIN,
       status: 'ACTIVE',
     },
@@ -147,134 +131,62 @@ async function main() {
 
   console.log(`Created ${branchManagers.length} Branch Managers`);
 
-  // Create LPG Products
-  const lpgProducts = await Promise.all([
+  // Create products
+  const products = await Promise.all([
+    // 6kg Category
     prisma.product.upsert({
       where: { code: 'LPG-6KG' },
       update: {},
-      create: {
-        name: 'LPG Refill 6kg',
-        code: 'LPG-6KG',
-        description: '6kg LPG gas refill',
-        type: ProductType.LPG_REFILL,
-        price: 1200.00,
-        costPrice: 1000.00,
-        cylinderSize: '6kg',
-        minStockLevel: 20,
-      },
+      create: { name: 'LPG Refill 6kg', code: 'LPG-6KG', description: '6kg LPG gas refill', type: ProductType.LPG_REFILL, categoryId: categories[0].id, price: 1200.00, costPrice: 1000.00, cylinderSize: '6kg', minStockLevel: 20 },
     }),
-    prisma.product.upsert({
-      where: { code: 'LPG-13KG' },
-      update: {},
-      create: {
-        name: 'LPG Refill 13kg',
-        code: 'LPG-13KG',
-        description: '13kg LPG gas refill',
-        type: ProductType.LPG_REFILL,
-        price: 2800.00,
-        costPrice: 2400.00,
-        cylinderSize: '13kg',
-        minStockLevel: 15,
-      },
-    }),
-    prisma.product.upsert({
-      where: { code: 'LPG-45KG' },
-      update: {},
-      create: {
-        name: 'LPG Refill 45kg',
-        code: 'LPG-45KG',
-        description: '45kg LPG gas refill (Commercial)',
-        type: ProductType.LPG_REFILL,
-        price: 8500.00,
-        costPrice: 7500.00,
-        cylinderSize: '45kg',
-        minStockLevel: 5,
-      },
-    }),
-    // Cylinder Sales
     prisma.product.upsert({
       where: { code: 'CYL-6KG-TOTAL' },
       update: {},
-      create: {
-        name: '6kg Cylinder (Total)',
-        code: 'CYL-6KG-TOTAL',
-        description: '6kg Gas Cylinder - Total Brand',
-        type: ProductType.LPG_CYLINDER,
-        price: 4500.00,
-        costPrice: 3800.00,
-        cylinderSize: '6kg',
-        brand: 'Total',
-        minStockLevel: 10,
-      },
+      create: { name: '6kg Cylinder (Total)', code: 'CYL-6KG-TOTAL', description: '6kg Gas Cylinder - Total Brand', type: ProductType.LPG_CYLINDER, categoryId: categories[0].id, price: 4500.00, costPrice: 3800.00, cylinderSize: '6kg', brand: 'Total', minStockLevel: 10 },
+    }),
+    // 13kg Category
+    prisma.product.upsert({
+      where: { code: 'LPG-13KG' },
+      update: {},
+      create: { name: 'LPG Refill 13kg', code: 'LPG-13KG', description: '13kg LPG gas refill', type: ProductType.LPG_REFILL, categoryId: categories[1].id, price: 2800.00, costPrice: 2400.00, cylinderSize: '13kg', minStockLevel: 15 },
     }),
     prisma.product.upsert({
       where: { code: 'CYL-13KG-KGAS' },
       update: {},
-      create: {
-        name: '13kg Cylinder (K-Gas)',
-        code: 'CYL-13KG-KGAS',
-        description: '13kg Gas Cylinder - K-Gas Brand',
-        type: ProductType.LPG_CYLINDER,
-        price: 8500.00,
-        costPrice: 7200.00,
-        cylinderSize: '13kg',
-        brand: 'K-Gas',
-        minStockLevel: 8,
-      },
+      create: { name: '13kg Cylinder (K-Gas)', code: 'CYL-13KG-KGAS', description: '13kg Gas Cylinder - K-Gas Brand', type: ProductType.LPG_CYLINDER, categoryId: categories[1].id, price: 8500.00, costPrice: 7200.00, cylinderSize: '13kg', brand: 'K-Gas', minStockLevel: 8 },
     }),
-    // Electronics
+    // 45kg Category
+    prisma.product.upsert({
+      where: { code: 'LPG-45KG' },
+      update: {},
+      create: { name: 'LPG Refill 45kg', code: 'LPG-45KG', description: '45kg LPG gas refill (Commercial)', type: ProductType.LPG_REFILL, categoryId: categories[2].id, price: 8500.00, costPrice: 7500.00, cylinderSize: '45kg', minStockLevel: 5 },
+    }),
+    // Accessories Category
     prisma.product.upsert({
       where: { code: 'REG-001' },
       update: {},
-      create: {
-        name: 'Gas Regulator Standard',
-        code: 'REG-001',
-        description: 'Standard LPG Gas Regulator',
-        type: ProductType.ELECTRONICS,
-        price: 450.00,
-        costPrice: 280.00,
-        minStockLevel: 30,
-      },
+      create: { name: 'Gas Regulator Standard', code: 'REG-001', description: 'Standard LPG Gas Regulator', type: ProductType.ELECTRONICS, categoryId: categories[3].id, price: 450.00, costPrice: 280.00, minStockLevel: 30 },
     }),
     prisma.product.upsert({
       where: { code: 'PIPE-001' },
       update: {},
-      create: {
-        name: 'Gas Pipe (1 meter)',
-        code: 'PIPE-001',
-        description: 'LPG Gas Pipe - 1 meter',
-        type: ProductType.ELECTRONICS,
-        price: 150.00,
-        costPrice: 80.00,
-        minStockLevel: 50,
-      },
+      create: { name: 'Gas Pipe (1 meter)', code: 'PIPE-001', description: 'LPG Gas Pipe - 1 meter', type: ProductType.ELECTRONICS, categoryId: categories[3].id, price: 150.00, costPrice: 80.00, minStockLevel: 50 },
     }),
     prisma.product.upsert({
       where: { code: 'BURN-001' },
       update: {},
-      create: {
-        name: 'Gas Burner Single',
-        code: 'BURN-001',
-        description: 'Single Gas Burner',
-        type: ProductType.ELECTRONICS,
-        price: 850.00,
-        costPrice: 550.00,
-        minStockLevel: 15,
-      },
+      create: { name: 'Gas Burner Single', code: 'BURN-001', description: 'Single Gas Burner', type: ProductType.ELECTRONICS, categoryId: categories[3].id, price: 850.00, costPrice: 550.00, minStockLevel: 15 },
     }),
   ]);
 
-  console.log(`Created ${lpgProducts.length} products`);
+  console.log(`Created ${products.length} products`);
 
   // Initialize inventory for all branches
   for (const branch of branches) {
-    for (const product of lpgProducts) {
+    for (const product of products) {
       await prisma.inventory.upsert({
         where: {
-          branchId_productId: {
-            branchId: branch.id,
-            productId: product.id,
-          },
+          branchId_productId: { branchId: branch.id, productId: product.id },
         },
         update: {},
         create: {
@@ -289,12 +201,74 @@ async function main() {
   }
 
   console.log('Initialized inventory for all branches');
-  console.log('Database seed completed successfully!');
+
+  // Create default system settings
+  const settings = await Promise.all([
+    prisma.systemSetting.upsert({
+      where: { key: 'CEO_PHONE' },
+      update: {},
+      create: { key: 'CEO_PHONE', value: '+254727202653', description: 'CEO phone number for notifications', isPublic: true },
+    }),
+    prisma.systemSetting.upsert({
+      where: { key: 'CEO_EMAIL' },
+      update: {},
+      create: { key: 'CEO_EMAIL', value: 'ceo@njugush.co.ke', description: 'CEO email address', isPublic: false },
+    }),
+    prisma.systemSetting.upsert({
+      where: { key: 'SMS_ENABLED' },
+      update: {},
+      create: { key: 'SMS_ENABLED', value: 'true', description: 'Enable SMS notifications', isPublic: true },
+    }),
+    prisma.systemSetting.upsert({
+      where: { key: 'DAILY_CLOSE_TIME' },
+      update: {},
+      create: { key: 'DAILY_CLOSE_TIME', value: '21:00', description: 'Daily branch closing time', isPublic: true },
+    }),
+    prisma.systemSetting.upsert({
+      where: { key: 'LOW_STOCK_ALERT' },
+      update: {},
+      create: { key: 'LOW_STOCK_ALERT', value: 'true', description: 'Enable low stock alerts', isPublic: true },
+    }),
+    prisma.systemSetting.upsert({
+      where: { key: 'MPESA_PAYBILL' },
+      update: {},
+      create: { key: 'MPESA_PAYBILL', value: '247247', description: 'M-Pesa Paybill number', isPublic: true },
+    }),
+  ]);
+
+  console.log(`Created ${settings.length} system settings`);
+
+  // Create sample customers
+  const customers = await Promise.all([
+    prisma.customer.upsert({
+      where: { phone: '+254712345678' },
+      update: {},
+      create: { customerCode: 'CUST-0001', fullName: 'John Kamau', phone: '+254712345678', email: 'john@example.com', creditLimit: 50000, isInvoiceEligible: true },
+    }),
+    prisma.customer.upsert({
+      where: { phone: '+254723456789' },
+      update: {},
+      create: { customerCode: 'CUST-0002', fullName: 'Mary Wanjiku', phone: '+254723456789', email: 'mary@example.com', creditLimit: 30000, isInvoiceEligible: true },
+    }),
+    prisma.customer.upsert({
+      where: { phone: '+254734567890' },
+      update: {},
+      create: { customerCode: 'CUST-0003', fullName: 'Peter Ochieng', phone: '+254734567890', businessName: 'Ochieng Gas Ltd', creditLimit: 100000, isInvoiceEligible: true },
+    }),
+  ]);
+
+  console.log(`Created ${customers.length} customers`);
+
   console.log('');
-  console.log('=== DEFAULT CREDENTIALS ===');
-  console.log('Super Admin: ceo@njugush.co.ke / admin123');
-  console.log('Manager: manager@njugush.co.ke / admin123');
-  console.log('Branch Managers: bm1@njugush.co.ke - bm6@njugush.co.ke / admin123');
+  console.log('========================================');
+  console.log('  SEED COMPLETED SUCCESSFULLY');
+  console.log('========================================');
+  console.log('');
+  console.log('Default Credentials:');
+  console.log('  Super Admin: ceo@njugush.co.ke / admin123');
+  console.log('  Manager:     manager@njugush.co.ke / admin123');
+  console.log('  Branch Mgrs: bm1@njugush.co.ke - bm6@njugush.co.ke / admin123');
+  console.log('');
 }
 
 main()

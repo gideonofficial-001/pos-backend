@@ -1,74 +1,77 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { InventoryService } from './inventory.service';
-import { RestockDto } from './dto/restock.dto';
-import { AdjustStockDto } from './dto/adjust-stock.dto';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { BranchAccessGuard } from '../auth/guards/branch-access.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { UserRole } from '@prisma/client';
 
+@ApiTags('Inventory')
 @Controller('inventory')
-@UseGuards(AuthGuard(), RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@ApiBearerAuth()
 export class InventoryController {
   constructor(private inventoryService: InventoryService) {}
 
   @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async getAllInventory() {
-    return this.inventoryService.getAllInventory();
-  }
-
-  @Get('branch/:branchId')
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
-  @UseGuards(BranchAccessGuard)
-  async getBranchInventory(@Param('branchId') branchId: string, @GetUser() user: any) {
-    return this.inventoryService.getBranchInventory(branchId, user);
+  @ApiOperation({ summary: 'Get all inventory items' })
+  async findAll(
+    @Query('branchId') branchId?: string,
+    @Query('lowStock') lowStock?: string,
+    @GetUser() user?: any,
+  ) {
+    return this.inventoryService.findAll({
+      branchId,
+      user,
+      lowStock: lowStock === 'true',
+    });
   }
 
-  @Get('product/:productId')
+  @Get('low-stock')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Get low stock items' })
+  async getLowStock(@GetUser() user?: any) {
+    return this.inventoryService.getLowStock(user);
+  }
+
+  @Get('movements')
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async getProductInventory(@Param('productId') productId: string) {
-    return this.inventoryService.getProductInventory(productId);
+  @ApiOperation({ summary: 'Get stock movements' })
+  async getStockMovements(
+    @Query('inventoryId') inventoryId?: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.inventoryService.getStockMovements(inventoryId, branchId);
   }
 
-  @Get('alerts/low-stock')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async getLowStockAlerts() {
-    return this.inventoryService.getLowStockAlerts();
+  @Get(':id')
+  @ApiOperation({ summary: 'Get inventory item by ID' })
+  async findOne(@Param('id') id: string) {
+    return this.inventoryService.findOne(id);
   }
 
-  @Get('reconciliation/cylinders')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async getCylinderReconciliation(@Query('branchId') branchId?: string) {
-    return this.inventoryService.getCylinderReconciliation(branchId);
-  }
-
-  @Post('restock')
+  @Post(':id/restock')
   @Roles(UserRole.SUPER_ADMIN)
-  async restock(@Body() restockDto: RestockDto, @GetUser('userId') userId: string) {
-    return this.inventoryService.restock(restockDto, userId);
-  }
-
-  @Post('adjust')
-  @Roles(UserRole.SUPER_ADMIN)
-  async adjustStock(@Body() adjustStockDto: AdjustStockDto, @GetUser('userId') userId: string) {
-    return this.inventoryService.adjustStock(adjustStockDto, userId);
-  }
-
-  @Post('transfer')
-  @Roles(UserRole.SUPER_ADMIN)
-  async transferStock(
-    @Body() transferDto: { fromBranchId: string; toBranchId: string; productId: string; quantity: number },
+  @ApiOperation({ summary: 'Restock inventory (Admin only)' })
+  async restock(
+    @Param('id') id: string,
+    @Body('quantity') quantity: number,
     @GetUser('userId') userId: string,
   ) {
-    return this.inventoryService.transferStock(
-      transferDto.fromBranchId,
-      transferDto.toBranchId,
-      transferDto.productId,
-      transferDto.quantity,
-      userId,
-    );
+    return this.inventoryService.restock(id, quantity, userId);
+  }
+
+  @Post(':id/adjust')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Adjust stock quantity (Admin only)' })
+  async adjustStock(
+    @Param('id') id: string,
+    @Body('quantity') quantity: number,
+    @Body('reason') reason: string,
+    @GetUser('userId') userId: string,
+  ) {
+    return this.inventoryService.adjustStock(id, quantity, reason, userId);
   }
 }

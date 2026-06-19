@@ -1,50 +1,67 @@
 import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { InvoicesService } from './invoices.service';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { BranchAccessGuard } from '../auth/guards/branch-access.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
 import { UserRole, InvoiceStatus } from '@prisma/client';
 
+@ApiTags('Invoices')
 @Controller('invoices')
-@UseGuards(AuthGuard(), RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@ApiBearerAuth()
 export class InvoicesController {
   constructor(private invoicesService: InvoicesService) {}
 
   @Post()
   @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
-  @UseGuards(BranchAccessGuard)
+  @ApiOperation({ summary: 'Create new invoice' })
   async create(@Body() createInvoiceDto: CreateInvoiceDto, @GetUser() user: any) {
     return this.invoicesService.create(createInvoiceDto, user);
   }
 
   @Get()
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Get all invoices' })
   async findAll(
     @Query('branchId') branchId?: string,
-    @Query('status') status?: InvoiceStatus,
+    @Query('status') status?: string,
+    @Query('overdue') overdue?: string,
     @GetUser() user?: any,
   ) {
-    return this.invoicesService.findAll({ branchId, status, user });
+    return this.invoicesService.findAll({ branchId, status, overdue: overdue === 'true', user });
+  }
+
+  @Get('summary')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
+  @ApiOperation({ summary: 'Get invoice summary' })
+  async getInvoiceSummary() {
+    return this.invoicesService.getInvoiceSummary();
+  }
+
+  @Get('overdue')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
+  @ApiOperation({ summary: 'Get overdue invoices' })
+  async getOverdueInvoices() {
+    return this.invoicesService.getOverdueInvoices();
   }
 
   @Get(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
-  async findOne(@Param('id') id: string, @GetUser() user: any) {
-    return this.invoicesService.findOne(id, user);
+  @ApiOperation({ summary: 'Get invoice by ID' })
+  async findOne(@Param('id') id: string) {
+    return this.invoicesService.findOne(id);
   }
 
-  @Patch(':id/pay')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
-  async markAsPaid(@Param('id') id: string, @GetUser() user: any) {
-    return this.invoicesService.markAsPaid(id, user);
-  }
-
-  @Patch(':id/cancel')
+  @Patch(':id/status')
   @Roles(UserRole.SUPER_ADMIN)
-  async cancel(@Param('id') id: string, @GetUser() user: any) {
-    return this.invoicesService.cancel(id, user);
+  @ApiOperation({ summary: 'Update invoice status (Admin only)' })
+  async updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: InvoiceStatus,
+    @GetUser('userId') userId: string,
+  ) {
+    return this.invoicesService.updateStatus(id, status, userId);
   }
 }

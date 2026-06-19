@@ -1,32 +1,35 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuditLogsService } from './audit-logs.service';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
-import { UserRole, AuditAction } from '@prisma/client';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '@prisma/client';
 
+@ApiTags('Audit Logs')
 @Controller('audit-logs')
-@UseGuards(AuthGuard(), RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@ApiBearerAuth()
 export class AuditLogsController {
   constructor(private auditLogsService: AuditLogsService) {}
 
   @Get()
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
+  @ApiOperation({ summary: 'Get all audit logs' })
   async findAll(
     @Query('userId') userId?: string,
-    @Query('action') action?: AuditAction,
+    @Query('action') action?: string,
     @Query('entityType') entityType?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
   ) {
-    return this.auditLogsService.findAll({ userId, action, entityType, startDate, endDate, page, limit });
+    return this.auditLogsService.findAll({ userId, action, entityType, startDate, endDate });
   }
 
-  @Get('by-user/:userId')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async findByUser(@Query('userId') userId: string) {
-    return this.auditLogsService.findByUser(userId);
+  @Get('stats')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Get audit log statistics' })
+  async getStats() {
+    return this.auditLogsService.getStats();
   }
 }

@@ -1,14 +1,14 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { UserRole, ReturnStatus, ProductType } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
+import { ReturnStatus, MovementType } from '@prisma/client';
 import { CreateReturnDto } from './dto/create-return.dto';
 
 @Injectable()
 export class ReturnsService {
   constructor(
     private prisma: PrismaService,
-    private auditLogsService: AuditLogsService,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(createReturnDto: CreateReturnDto, user: any) {
@@ -16,28 +16,24 @@ export class ReturnsService {
 
     const sale = await this.prisma.sale.findUnique({
       where: { id: saleId },
-      include: { items: { include: { product: true } } },
+      include: { items: { include: { product: true } }, branch: true },
     });
 
     if (!sale) {
       throw new NotFoundException('Sale not found');
     }
 
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) {
-      throw new ForbiddenException('Access denied for this sale');
-    }
-
+    // Check if return already exists for this sale
     const existingReturn = await this.prisma.return.findFirst({
-      where: { saleId },
+      where: { saleId, status: { in: ['PENDING', 'APPROVED'] } },
     });
-
     if (existingReturn) {
-      throw new BadRequestException('Sale already has a return request');
+      throw new BadRequestException('A return request already exists for this sale');
     }
 
-    const year = new Date().getFullYear();
-    const randomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const returnCode = `RET-${randomCode}-${year}`;
+    // Generate return code
+    const count = await this.prisma.return.count();
+    const returnCode = `RTN-${String(count + 1).padStart(5, '0')}`;
 
     const returnRequest = await this.prisma.return.create({
       data: {
@@ -45,79 +41,91 @@ export class ReturnsService {
         saleId,
         userId: user.userId,
         reason,
-        amount,
+        amount: amount || sale.total,
         status: ReturnStatus.PENDING,
       },
       include: {
         sale: { include: { items: { include: { product: true } } } },
-        user: { select: { id: true, firstName: true, lastName: true } },
+        user: { select: { firstName: true, lastName: true } },
       },
     });
 
-    await this.auditLogsService.create({
+    // Notify admin
+    await this.notificationsService.create({
+      type: 'RETURN_REQUEST',
+      title: 'New Return Request',
+      message: `Return ${returnCode} for sale ${sale.saleCode} - Reason: ${reason}`,
       userId: user.userId,
-      action: 'SALE_RETURNED',
-      description: `Requested return for sale ${sale.saleCode}`,
-      entityType: 'Return',
       entityId: returnRequest.id,
-      newValues: createReturnDto,
+      entityType: 'Return',
+    });
+
+    // Create activity feed
+    await this.prisma.activityFeed.create({
+      data: {
+        actorId: user.userId,
+        actorName: `${user.firstName} ${user.lastName}`,
+        branchId: sale.branchId,
+        title: 'Return Requested',
+        message: `Return ${returnCode} for sale ${sale.saleCode}`,
+        entityId: returnRequest.id,
+        entityType: 'Return',
+        visibleToAdmin: true,
+        visibleToBranch: true,
+      },
     });
 
     return returnRequest;
   }
 
-  async findAll(query: { status?: ReturnStatus; user?: any }) {
-    const { status, user } = query;
+  async findAll(query?: { branchId?: string; status?: string; user?: any }) {
     const where: any = {};
 
-    if (status) {
-      where.status = status;
+    if (query?.status) {
+      where.status = query.status;
     }
 
-    if (user.role === UserRole.BRANCH_MANAGER) {
-      where.sale = { branchId: user.branchId };
+    if (query?.branchId) {
+      where.sale = { branchId: query.branchId };
     }
 
     return this.prisma.return.findMany({
       where,
       include: {
-        sale: { include: { branch: { select: { id: true, name: true, code: true } } } },
-        user: { select: { id: true, firstName: true, lastName: true } },
+        sale: {
+          include: {
+            items: { include: { product: true } },
+            branch: { select: { id: true, name: true, code: true } },
+          },
+        },
+        user: { select: { firstName: true, lastName: true } },
+        approvedBy: { select: { firstName: true, lastName: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findOne(id: string, user: any) {
+  async findOne(id: string) {
     const returnRequest = await this.prisma.return.findUnique({
       where: { id },
       include: {
-        sale: { include: { items: { include: { product: true } }, branch: true } },
-        user: { select: { id: true, firstName: true, lastName: true } },
+        sale: { include: { items: { include: { product: true } } } },
+        user: { select: { firstName: true, lastName: true } },
+        approvedBy: { select: { firstName: true, lastName: true } },
       },
     });
 
     if (!returnRequest) {
       throw new NotFoundException('Return request not found');
-    }
-
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== returnRequest.sale.branchId) {
-      throw new ForbiddenException('Access denied for this return');
     }
 
     return returnRequest;
   }
 
-  async approve(id: string, user: any) {
-    if (user.role !== UserRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only Super Admin can approve returns');
-    }
-
+  async approve(id: string, approvedById: string) {
     const returnRequest = await this.prisma.return.findUnique({
       where: { id },
-      include: {
-        sale: { include: { items: { include: { product: true } } } },
-      },
+      include: { sale: { include: { items: true } } },
     });
 
     if (!returnRequest) {
@@ -128,71 +136,74 @@ export class ReturnsService {
       throw new BadRequestException('Return request is not pending');
     }
 
-    // Update return status
-    const updatedReturn = await this.prisma.return.update({
-      where: { id },
-      data: {
-        status: ReturnStatus.APPROVED,
-        approvedById: user.userId,
-        approvedAt: new Date(),
-      },
-      include: {
-        sale: { include: { branch: true } },
-      },
-    });
+    // Process return in transaction
+    await this.prisma.$transaction(async (tx) => {
+      // Update return status
+      await tx.return.update({
+        where: { id },
+        data: {
+          status: ReturnStatus.APPROVED,
+          approvedById,
+          approvedAt: new Date(),
+          stockReversed: true,
+        },
+      });
 
-    // Reverse stock
-    for (const item of returnRequest.sale.items) {
-      const updateData: any = {
-        quantity: { increment: item.quantity },
-      };
+      // Restore inventory
+      for (const item of returnRequest.sale.items) {
+        const inventory = await tx.inventory.findUnique({
+          where: { branchId_productId: { branchId: returnRequest.sale.branchId, productId: item.productId } },
+        });
 
-      if (item.product.type === ProductType.LPG_REFILL) {
-        updateData.fullCylinders = { increment: item.quantity };
-        updateData.emptyCylinders = { decrement: item.quantity };
-        updateData.totalSold = { decrement: item.quantity };
+        if (inventory) {
+          await tx.inventory.update({
+            where: { id: inventory.id },
+            data: {
+              quantity: { increment: item.quantity },
+            },
+          });
+
+          // Create stock movement
+          await tx.stockMovement.create({
+            data: {
+              inventoryId: inventory.id,
+              productId: item.productId,
+              branchId: returnRequest.sale.branchId,
+              quantityBefore: inventory.quantity,
+              quantityChanged: item.quantity,
+              quantityAfter: inventory.quantity + item.quantity,
+              movementType: MovementType.RETURN,
+              referenceId: id,
+              referenceType: 'Return',
+              performedById: approvedById,
+              notes: `Return approved: ${returnRequest.returnCode}`,
+            },
+          });
+        }
       }
 
-      await this.prisma.inventory.update({
-        where: { branchId_productId: { branchId: returnRequest.sale.branchId, productId: item.productId } },
-        data: updateData,
+      // Update sale status
+      await tx.sale.update({
+        where: { id: returnRequest.saleId },
+        data: { status: 'RETURNED' },
       });
-    }
-
-    // Update sale status
-    await this.prisma.sale.update({
-      where: { id: returnRequest.saleId },
-      data: { status: 'RETURNED' },
     });
 
-    // Mark stock as reversed
-    await this.prisma.return.update({
-      where: { id },
-      data: { stockReversed: true },
-    });
-
-    await this.auditLogsService.create({
-      userId: user.userId,
-      action: 'SALE_RETURNED',
-      description: `Approved return ${returnRequest.returnCode}`,
-      entityType: 'Return',
+    // Notify requester
+    await this.notificationsService.create({
+      type: 'RETURN_APPROVED',
+      title: 'Return Approved',
+      message: `Your return request ${returnRequest.returnCode} has been approved`,
+      userId: returnRequest.userId,
       entityId: id,
-      oldValues: { status: ReturnStatus.PENDING },
-      newValues: { status: ReturnStatus.APPROVED },
+      entityType: 'Return',
     });
 
-    return updatedReturn;
+    return this.findOne(id);
   }
 
-  async reject(id: string, reason: string, user: any) {
-    if (user.role !== UserRole.SUPER_ADMIN) {
-      throw new ForbiddenException('Only Super Admin can reject returns');
-    }
-
-    const returnRequest = await this.prisma.return.findUnique({
-      where: { id },
-    });
-
+  async reject(id: string, approvedById: string, rejectionReason: string) {
+    const returnRequest = await this.prisma.return.findUnique({ where: { id } });
     if (!returnRequest) {
       throw new NotFoundException('Return request not found');
     }
@@ -201,29 +212,26 @@ export class ReturnsService {
       throw new BadRequestException('Return request is not pending');
     }
 
-    const updatedReturn = await this.prisma.return.update({
+    await this.prisma.return.update({
       where: { id },
       data: {
         status: ReturnStatus.REJECTED,
-        approvedById: user.userId,
+        approvedById,
         approvedAt: new Date(),
-        rejectionReason: reason,
-      },
-      include: {
-        sale: { include: { branch: true } },
+        rejectionReason,
       },
     });
 
-    await this.auditLogsService.create({
-      userId: user.userId,
-      action: 'SALE_RETURNED',
-      description: `Rejected return ${returnRequest.returnCode}`,
-      entityType: 'Return',
+    // Notify requester
+    await this.notificationsService.create({
+      type: 'RETURN_REJECTED',
+      title: 'Return Rejected',
+      message: `Your return request ${returnRequest.returnCode} has been rejected. Reason: ${rejectionReason}`,
+      userId: returnRequest.userId,
       entityId: id,
-      oldValues: { status: ReturnStatus.PENDING },
-      newValues: { status: ReturnStatus.REJECTED, reason },
+      entityType: 'Return',
     });
 
-    return updatedReturn;
+    return this.findOne(id);
   }
 }

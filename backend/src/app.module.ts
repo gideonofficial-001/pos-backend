@@ -10,10 +10,15 @@ import { InventoryModule } from './inventory/inventory.module';
 import { SalesModule } from './sales/sales.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { ReturnsModule } from './returns/returns.module';
+import { ExpensesModule } from './expenses/expenses.module';
+import { TransfersModule } from './transfers/transfers.module';
 import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { ReportsModule } from './reports/reports.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DevicesModule } from './devices/devices.module';
+import { CustomersModule } from './customers/customers.module';
+import { SettingsModule } from './settings/settings.module';
+import { ActivityFeedModule } from './activity-feed/activity-feed.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -32,10 +37,15 @@ import { HealthController } from './health.controller';
     SalesModule,
     InvoicesModule,
     ReturnsModule,
+    ExpensesModule,
+    TransfersModule,
     AuditLogsModule,
     ReportsModule,
     NotificationsModule,
     DevicesModule,
+    CustomersModule,
+    SettingsModule,
+    ActivityFeedModule,
   ],
   controllers: [HealthController],
 })

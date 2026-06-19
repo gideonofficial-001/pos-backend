@@ -1,14 +1,19 @@
-import { IsString, IsNotEmpty, IsDecimal } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, IsNumber } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateReturnDto {
+  @ApiProperty()
+  @IsNotEmpty({ message: 'Sale ID is required' })
   @IsString()
-  @IsNotEmpty()
   saleId: string;
 
+  @ApiProperty()
+  @IsNotEmpty({ message: 'Return reason is required' })
   @IsString()
-  @IsNotEmpty()
   reason: string;
 
-  @IsDecimal({ decimal_digits: '2' })
-  amount: string;
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  amount?: number;
 }

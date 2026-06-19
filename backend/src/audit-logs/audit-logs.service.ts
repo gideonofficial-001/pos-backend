@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditAction, Prisma } from '@prisma/client';
 
 @Injectable()
 export class AuditLogsService {
@@ -8,76 +7,70 @@ export class AuditLogsService {
 
   async create(data: {
     userId?: string;
-    action: AuditAction;
-    entityType?: string;
+    action: string;
+    entityType: string;
     entityId?: string;
+    description: string;
     oldValues?: any;
     newValues?: any;
-    description: string;
     ipAddress?: string;
     userAgent?: string;
   }) {
-    return this.prisma.auditLog.create({
-      data: { ...data, createdAt: new Date() } as Prisma.AuditLogUncheckedCreateInput
-    });
+    try {
+      return this.prisma.auditLog.create({
+        data: {
+          userId: data.userId,
+          action: data.action as any,
+          entityType: data.entityType,
+          entityId: data.entityId,
+          description: data.description,
+          oldValues: data.oldValues || null,
+          newValues: data.newValues || null,
+          ipAddress: data.ipAddress,
+          userAgent: data.userAgent,
+        },
+      });
+    } catch (error) {
+      // Don't throw - audit logs should not break the main flow
+      console.error('Failed to create audit log:', error);
+      return null;
+    }
   }
 
-  async findAll(query: {
-    userId?: string;
-    action?: AuditAction;
-    entityType?: string;
-    startDate?: string;
-    endDate?: string;
-    page?: number | string;
-    limit?: number | string;
-  }) {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 50;
-    const { userId, action, entityType, startDate, endDate } = query;
+  async findAll(query?: { userId?: string; action?: string; entityType?: string; startDate?: string; endDate?: string }) {
+    const where: any = {};
 
-    const where: Prisma.AuditLogWhereInput = {};
-
-    if (userId) where.userId = userId;
-    if (action) where.action = action;
-    if (entityType) where.entityType = entityType;
-
-    if (startDate || endDate) {
-      where.createdAt = {};
-      if (startDate) where.createdAt.gte = new Date(startDate);
-      if (endDate) where.createdAt.lte = new Date(endDate);
+    if (query?.userId) where.userId = query.userId;
+    if (query?.action) where.action = query.action;
+    if (query?.entityType) where.entityType = query.entityType;
+    if (query?.startDate && query?.endDate) {
+      where.createdAt = { gte: new Date(query.startDate), lte: new Date(query.endDate) };
     }
 
-    const skip = (page - 1) * limit;
+    return this.prisma.auditLog.findMany({
+      where,
+      include: {
+        user: { select: { firstName: true, lastName: true, email: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+  }
 
-    const [logs, total] = await Promise.all([
-      this.prisma.auditLog.findMany({
-        where,
-        include: { user: { select: { id: true, firstName: true, lastName: true, email: true } } },
-        orderBy: { createdAt: 'desc' },
-        skip,
-        take: limit,
+  async getStats() {
+    const [total, todayCount, byAction] = await Promise.all([
+      this.prisma.auditLog.count(),
+      this.prisma.auditLog.count({
+        where: { createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } },
       }),
-      this.prisma.auditLog.count({ where }),
+      this.prisma.auditLog.groupBy({
+        by: ['action'],
+        _count: { action: true },
+        orderBy: { _count: { action: 'desc' } },
+        take: 10,
+      }),
     ]);
 
-    return {
-      data: logs,
-      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
-    };
-  }
-
-  async findByUser(userId: string) {
-    return this.prisma.auditLog.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-      take: 100,
-    });
-  }
-
-  async findByEntity(entityType: string, entityId: string) {
-    return this.prisma.auditLog.findMany({
-      where: { entityType, entityId },
-      orderBy: { createdAt: 'desc' },
-    });
+    return { total, today: todayCount, byAction };
   }
 }

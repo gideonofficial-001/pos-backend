@@ -1,33 +1,50 @@
 services:
   - type: web
-    name: njugush-pos-api
-    runtime: docker
-    repo: https://github.com/gideonofficial-001/pos-backend  # ← fix this
-    branch: main
-    dockerfilePath: ./backend/Dockerfile
+    name: njugush-pos-backend
+    env: node
+    plan: starter
+    region: oregon
+    buildCommand: cd backend && npm install && npx prisma generate && npm run build
+    startCommand: cd backend && npx prisma migrate deploy && npm run start:prod
     envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
       - key: DATABASE_URL
         fromDatabase:
           name: njugush-pos-db
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
-      - key: JWT_EXPIRATION
+      - key: JWT_EXPIRES_IN
         value: 24h
-      - key: NODE_ENV
-        value: production
       - key: FRONTEND_URL
-        value: https://njugush-ent.vercel.app  # ← fix this
-      - key: CEO_PHONE
-        value: +254796928551
-      - key: CEO_EMAIL
-        value: ceo@njugush.co.ke
-    healthCheckPath: /api/health
-    autoDeploy: true
+        value: https://njugush-pos.vercel.app
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASS
+        sync: false
+
+  - type: web
+    name: njugush-pos-frontend
+    env: static
+    plan: starter
+    region: oregon
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: ./frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://njugush-pos-backend.onrender.com/api
+    routes:
+      - type: rewrite
+        source: /.*
+        destination: /index.html
 
 databases:
   - name: njugush-pos-db
-    databaseName: njugush_pos
-    user: njugush
     plan: starter
+    region: oregon
+    databaseName: njugush_pos
+    user: njugush_admin
     ipAllowList: []

@@ -1,23 +1,34 @@
-import { IsString, IsOptional, IsEmail, IsBoolean } from 'class-validator';
+import { IsOptional, IsString, IsBoolean } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class UpdateBranchDto {
-  @IsString()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
   name?: string;
 
-  @IsString()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
   address?: string;
 
-  @IsString()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
   phone?: string;
 
-  @IsEmail()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
   email?: string;
 
-  @IsBoolean()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsBoolean()
   isActive?: boolean;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  managerId?: string;
 }

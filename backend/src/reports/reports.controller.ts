@@ -1,43 +1,62 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ReportsService } from './reports.service';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { GetUser } from '../auth/decorators/get-user.decorator';
 import { UserRole } from '@prisma/client';
 
+@ApiTags('Reports')
 @Controller('reports')
-@UseGuards(AuthGuard(), RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@ApiBearerAuth()
 export class ReportsController {
   constructor(private reportsService: ReportsService) {}
 
-  @Get('sales')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async getSalesReport(
-    @Query('startDate') startDate: string,
-    @Query('endDate') endDate: string,
-    @Query('branchId') branchId?: string,
+  @Get('dashboard')
+  @ApiOperation({ summary: 'Get dashboard statistics' })
+  async getDashboardStats(@GetUser() user?: any) {
+    return this.reportsService.getDashboardStats(user);
+  }
+
+  @Get('sales-trend')
+  @ApiOperation({ summary: 'Get sales trend data' })
+  async getSalesTrend(
+    @Query('days') days?: string,
+    @GetUser() user?: any,
   ) {
-    return this.reportsService.getSalesReport(startDate, endDate, branchId);
+    return this.reportsService.getSalesTrend(days ? parseInt(days) : 30, user);
   }
 
-  @Get('inventory')
+  @Get('branch-performance')
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async getInventoryReport(@Query('branchId') branchId?: string) {
-    return this.reportsService.getInventoryReport(branchId);
+  @ApiOperation({ summary: 'Get branch performance report' })
+  async getBranchPerformance() {
+    return this.reportsService.getBranchPerformance();
   }
 
-  @Get('cylinder-reconciliation')
+  @Get('product-performance')
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async getCylinderReconciliationReport(@Query('branchId') branchId?: string) {
-    return this.reportsService.getCylinderReconciliationReport(branchId);
+  @ApiOperation({ summary: 'Get product performance report' })
+  async getProductPerformance() {
+    return this.reportsService.getProductPerformance();
   }
 
-  @Get('user-performance')
+  @Get('expenses')
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  async getUserPerformanceReport(
-    @Query('startDate') startDate: string,
-    @Query('endDate') endDate: string,
+  @ApiOperation({ summary: 'Get expense report' })
+  async getExpenseReport(
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
   ) {
-    return this.reportsService.getUserPerformanceReport(startDate, endDate);
+    return this.reportsService.getExpenseReport(startDate, endDate);
+  }
+
+  @Get('inventory-valuation')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
+  @ApiOperation({ summary: 'Get inventory valuation report' })
+  async getInventoryValuation() {
+    return this.reportsService.getInventoryValuation();
   }
 }

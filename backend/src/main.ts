@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -14,7 +15,7 @@ async function bootstrap() {
     credentials: true,
   });
 
-  // Global validation pipe (note: useGlobalPipes is correct - plural)
+  // Global validation pipe
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -26,11 +27,24 @@ async function bootstrap() {
   // Global prefix
   app.setGlobalPrefix('api');
 
+  // Swagger API Documentation
+  const swaggerConfig = new DocumentBuilder()
+    .setTitle('Njugush POS API')
+    .setDescription('Njugush Enterprises POS & Inventory Management System API')
+    .setVersion('1.0.0')
+    .addBearerAuth()
+    .build();
+  const document = SwaggerModule.createDocument(app, swaggerConfig);
+  SwaggerModule.setup('api/docs', app, document);
+
   const port = configService.get('PORT') || 3000;
   await app.listen(port);
 
-  console.log(`Njugush POS Backend running on port ${port}`);
-  console.log(`API Documentation: http://localhost:${port}/api`);
+  console.log(`========================================`);
+  console.log(`  Njugush POS Backend v1.0.0`);
+  console.log(`  Running on port ${port}`);
+  console.log(`  API Docs: http://localhost:${port}/api/docs`);
+  console.log(`========================================`);
 }
 
 bootstrap();

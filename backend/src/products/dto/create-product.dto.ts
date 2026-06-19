@@ -1,39 +1,55 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsDecimal, IsInt, Min } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, IsEnum, IsNumber, IsBoolean } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 import { ProductType } from '@prisma/client';
 
 export class CreateProductDto {
+  @ApiProperty({ example: 'LPG Refill 6kg' })
+  @IsNotEmpty({ message: 'Product name is required' })
   @IsString()
-  @IsNotEmpty()
   name: string;
 
+  @ApiProperty({ example: 'LPG-6KG' })
+  @IsNotEmpty({ message: 'Product code is required' })
   @IsString()
-  @IsNotEmpty()
   code: string;
 
-  @IsString()
+  @ApiProperty({ example: '6kg LPG gas refill', required: false })
   @IsOptional()
+  @IsString()
   description?: string;
 
-  @IsEnum(ProductType)
+  @ApiProperty({ enum: ProductType, example: 'LPG_REFILL' })
+  @IsEnum(ProductType, { message: 'Type must be LPG_REFILL, LPG_CYLINDER, ELECTRONICS, or ACCESSORIES' })
+  @IsNotEmpty({ message: 'Product type is required' })
   type: ProductType;
 
-  @IsDecimal({ decimal_digits: '2' })
-  price: string;
-
-  @IsDecimal({ decimal_digits: '2' })
+  @ApiProperty({ example: 'category-id', required: false })
   @IsOptional()
-  costPrice?: string;
-
   @IsString()
+  categoryId?: string;
+
+  @ApiProperty({ example: 1200.00 })
+  @IsNotEmpty({ message: 'Price is required' })
+  @IsNumber()
+  price: number;
+
+  @ApiProperty({ example: 1000.00, required: false })
   @IsOptional()
+  @IsNumber()
+  costPrice?: number;
+
+  @ApiProperty({ example: '6kg', required: false })
+  @IsOptional()
+  @IsString()
   cylinderSize?: string;
 
-  @IsString()
+  @ApiProperty({ example: 'Total', required: false })
   @IsOptional()
+  @IsString()
   brand?: string;
 
-  @IsInt()
-  @Min(0)
+  @ApiProperty({ example: 10, required: false })
   @IsOptional()
+  @IsNumber()
   minStockLevel?: number;
 }

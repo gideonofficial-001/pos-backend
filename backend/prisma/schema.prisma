@@ -132,13 +132,13 @@ enum PaymentProvider {
 
 // Movement types for the inventory ledger
 enum MovementType {
-  SALE          // Stock reduced by a sale
-  RETURN        // Stock increased by a return
-  TRANSFER_OUT  // Stock reduced by outgoing transfer
-  TRANSFER_IN   // Stock increased by incoming transfer
-  RESTOCK       // Stock increased by restocking
-  ADJUSTMENT    // Manual stock adjustment
-  OPENING       // Initial stock entry
+  SALE // Stock reduced by a sale
+  RETURN // Stock increased by a return
+  TRANSFER_OUT // Stock reduced by outgoing transfer
+  TRANSFER_IN // Stock increased by incoming transfer
+  RESTOCK // Stock increased by restocking
+  ADJUSTMENT // Manual stock adjustment
+  OPENING // Initial stock entry
 }
 
 // Activity feed actor types
@@ -150,18 +150,18 @@ enum ActivityActor {
 // ==================== MODELS ====================
 
 model User {
-  id          String     @id @default(uuid())
-  email       String     @unique
-  password    String
-  firstName   String
-  lastName    String
-  phone       String?
-  role        UserRole
-  status      UserStatus @default(ACTIVE)
+  id        String     @id @default(uuid())
+  email     String     @unique
+  password  String
+  firstName String
+  lastName  String
+  phone     String?
+  role      UserRole
+  status    UserStatus @default(ACTIVE)
 
-  branchId    String?
-  branch      Branch?    @relation("BranchUsers", fields: [branchId], references: [id])
-  managedBranch Branch?  @relation("BranchManager")
+  branchId String?
+  branch   Branch? @relation("BranchUsers", fields: [branchId], references: [id])
+  managedBranch Branch? @relation("BranchManager")
 
   lastLoginAt DateTime?
 
@@ -189,9 +189,9 @@ model User {
 }
 
 model Device {
-  id           String       @id @default(uuid())
-  userId       String
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String       @id @default(uuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   fingerprint    String
   deviceInfo     String
@@ -202,7 +202,7 @@ model Device {
   approvedBy     User?        @relation("ApprovedBy", fields: [approvedById], references: [id])
   approvedAt     DateTime?
 
-  authCodeHash   String?
+  authCode       String?
   authCodeExpiry DateTime?
 
   lastUsedAt   DateTime     @default(now())
@@ -502,7 +502,7 @@ model Transfer {
   initiator   User   @relation("InitiatedBy", fields: [initiatedBy], references: [id])
 
   approvedById String?
-  approvedBy   User?   @relation("ApprovedBy", fields: [approvedById], references: [id])
+  approvedBy   User?   @relation("TransferApprovedBy", fields: [approvedById], references: [id])
 
   status          TransferStatus @default(PENDING)
   notes           String?
@@ -558,7 +558,6 @@ model RefillVerification {
 
 // ─── Inventory Ledger ────────────────────────────────────────────────────────
 // Complete audit trail of every stock movement.
-// Answers "why do I have X units?" instantly.
 
 model StockMovement {
   id String @id @default(uuid())
@@ -570,16 +569,14 @@ model StockMovement {
   branchId  String
 
   quantityBefore  Int
-  quantityChanged Int   // positive = stock added, negative = stock removed
+  quantityChanged Int
   quantityAfter   Int
 
   movementType MovementType
 
-  // Link back to the source record (sale, transfer, return, etc.)
-  referenceId   String? // e.g. sale ID, transfer ID, return ID
-  referenceType String? // e.g. "Sale", "Transfer", "Return", "Adjustment"
+  referenceId   String?
+  referenceType String?
 
-  // Who triggered this movement
   performedById String?
   performedBy   User?   @relation(fields: [performedById], references: [id])
 
@@ -594,8 +591,6 @@ model StockMovement {
 }
 
 // ─── Branch Daily Closing ────────────────────────────────────────────────────
-// End-of-day cash reconciliation per branch.
-// Detects cash variances and triggers CEO summary at 9 PM.
 
 model BranchClosing {
   id String @id @default(uuid())
@@ -605,16 +600,15 @@ model BranchClosing {
 
   closingDate DateTime
 
-  expectedCash Decimal @db.Decimal(10, 2) // From system sales total
-  actualCash   Decimal @db.Decimal(10, 2) // Physically counted
-  variance     Decimal @db.Decimal(10, 2) // actualCash - expectedCash
+  expectedCash Decimal @db.Decimal(10, 2)
+  actualCash   Decimal @db.Decimal(10, 2)
+  variance     Decimal @db.Decimal(10, 2)
 
   totalSales    Int
   totalRevenue  Decimal @db.Decimal(10, 2)
   totalExpenses Decimal @db.Decimal(10, 2) @default(0)
-  netAmount     Decimal @db.Decimal(10, 2) // Revenue - Expenses
+  netAmount     Decimal @db.Decimal(10, 2)
 
-  // Who submitted the closing report
   submittedById String?
   submittedBy   User?   @relation(fields: [submittedById], references: [id])
 
@@ -624,70 +618,46 @@ model BranchClosing {
   notes     String?
   createdAt DateTime @default(now())
 
-  // One closing per branch per day
   @@unique([branchId, closingDate])
   @@index([closingDate])
   @@map("branch_closings")
 }
 
 // ─── System Settings ─────────────────────────────────────────────────────────
-// Key-value store for all configurable system parameters.
-// No more hardcoded phone numbers or paybill numbers.
-//
-// Default keys to seed:
-//   CEO_PHONE        → +254727202653
-//   CEO_EMAIL        → ceo@njugush.co.ke
-//   MPESA_PAYBILL    → (paybill number)
-//   SMS_ENABLED      → true
-//   DAILY_CLOSE_TIME → 21:00
-//   LOW_STOCK_ALERT  → true
 
 model SystemSetting {
   id    String @id @default(uuid())
   key   String @unique
   value String
 
-  description String? // Human-readable explanation of what this setting does
-  isPublic    Boolean @default(false) // Whether non-admins can read this setting
+  description String?
+  isPublic    Boolean @default(false)
 
   updatedAt DateTime @updatedAt
-  updatedBy String?  // User ID of last person to change this setting
+  updatedBy String?
 
   @@map("system_settings")
 }
 
 // ─── Activity Feed ───────────────────────────────────────────────────────────
-// Powers the live dashboard activity feed.
-// Generated automatically by the backend on key events.
-//
-// Example feed:
-//   10 mins ago — Branch 3 created invoice INV-123
-//   20 mins ago — Branch 5 requested transfer TRF-452
-//   45 mins ago — Return RTN-221 approved
-//   2 hrs ago   — Low stock detected at Branch 2
 
 model ActivityFeed {
   id String @id @default(uuid())
 
-  // Who/what triggered this activity
-  actorId   String?      // User ID or null if system-generated
+  actorId   String?
   actorType ActivityActor @default(USER)
-  actorName String?       // Cached display name (e.g. "John Doe" or "System")
+  actorName String?
 
-  // The branch this activity belongs to
   branchId   String?
-  branchName String? // Cached for display
+  branchName String?
 
-  // Human-readable activity text
-  title   String // Short title: "Invoice Created"
-  message String // Full message: "Branch 3 created invoice INV-123 for KES 2,400"
+  title   String
+  message String
 
-  // Link to the source record
-  entityId   String? // e.g. invoice ID, transfer ID
-  entityType String? // e.g. "Invoice", "Transfer", "Return"
-  actionUrl  String? // Frontend route to navigate to on click
+  entityId   String?
+  entityType String?
+  actionUrl  String?
 
-  // Visibility — which roles can see this feed item
   visibleToAdmin   Boolean @default(true)
   visibleToManager Boolean @default(false)
   visibleToBranch  Boolean @default(false)

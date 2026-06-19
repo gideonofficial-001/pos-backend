@@ -18,7 +18,7 @@ export class UsersService {
 
     const existingUser = await this.prisma.user.findUnique({ where: { email } });
     if (existingUser) {
-      throw new ConflictException('Email already registered');
+      throw new ConflictException('Email is already registered');
     }
 
     if (role === UserRole.BRANCH_MANAGER && !branchId) {
@@ -58,6 +58,8 @@ export class UsersService {
     const users = await this.prisma.user.findMany({
       include: {
         branch: { select: { id: true, name: true, code: true } },
+        managedBranch: { select: { id: true, name: true, code: true } },
+        _count: { select: { sales: true, devices: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -69,9 +71,11 @@ export class UsersService {
       where: { id },
       include: {
         branch: true,
+        managedBranch: true,
         devices: {
           select: { id: true, deviceInfo: true, status: true, lastUsedAt: true, createdAt: true },
         },
+        _count: { select: { sales: true } },
       },
     });
 
@@ -110,7 +114,7 @@ export class UsersService {
       description: `Updated user ${user.email}`,
       entityType: 'User',
       entityId: id,
-      oldValues: user,
+      oldValues: { role: user.role, status: user.status, branchId: user.branchId },
       newValues: updateUserDto,
     });
 
@@ -118,7 +122,7 @@ export class UsersService {
     return result;
   }
 
-  async remove(id: string, performedBy: string) {
+  async remove(id: string, performedBy: string, confirmationText: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
       include: { _count: { select: { sales: true } } },
@@ -132,7 +136,26 @@ export class UsersService {
       throw new BadRequestException('Cannot delete super admin user');
     }
 
-    await this.prisma.user.delete({ where: { id } });
+    // Require confirmation text to prevent accidental deletion
+    const expectedText = `delete user ${user.email}`;
+    if (confirmationText !== expectedText) {
+      throw new BadRequestException(`Please type "delete user ${user.email}" to confirm deletion`);
+    }
+
+    // Use transaction to handle related records
+    await this.prisma.$transaction(async (tx) => {
+      // Clear manager reference from branch
+      await tx.branch.updateMany({
+        where: { managerId: id },
+        data: { managerId: null },
+      });
+
+      // Delete user's devices
+      await tx.device.deleteMany({ where: { userId: id } });
+
+      // Delete user
+      await tx.user.delete({ where: { id } });
+    });
 
     await this.auditLogsService.create({
       userId: performedBy,
@@ -140,10 +163,10 @@ export class UsersService {
       description: `Deleted user ${user.email}`,
       entityType: 'User',
       entityId: id,
-      oldValues: user,
+      oldValues: { email: user.email, role: user.role },
     });
 
-    return { message: 'User deleted successfully' };
+    return { message: `User ${user.email} has been permanently deleted` };
   }
 
   async updateStatus(id: string, status: UserStatus, performedBy: string) {
@@ -170,5 +193,19 @@ export class UsersService {
 
     const { password, ...result } = updatedUser;
     return result;
+  }
+
+  async getStats() {
+    const [total, active, inactive, byRole] = await Promise.all([
+      this.prisma.user.count(),
+      this.prisma.user.count({ where: { status: UserStatus.ACTIVE } }),
+      this.prisma.user.count({ where: { status: UserStatus.INACTIVE } }),
+      this.prisma.user.groupBy({
+        by: ['role'],
+        _count: { role: true },
+      }),
+    ]);
+
+    return { total, active, inactive, byRole };
   }
 }

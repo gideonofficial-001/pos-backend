@@ -1,175 +1,180 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { SaleStatus, ProductType } from '@prisma/client';
+import { UserRole, SaleStatus, ProductType } from '@prisma/client';
 
 @Injectable()
 export class ReportsService {
   constructor(private prisma: PrismaService) {}
 
-  async getSalesReport(startDate: string, endDate: string, branchId?: string) {
-    const where: any = {
-      saleDate: { gte: new Date(startDate), lte: new Date(endDate) },
-      status: SaleStatus.COMPLETED,
-    };
+  async getDashboardStats(user?: any) {
+    const where: any = {};
+    if (user?.role === UserRole.BRANCH_MANAGER) {
+      where.branchId = user.branchId;
+    }
 
-    if (branchId) where.branchId = branchId;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const [totalSales, todaySales, totalRevenue, totalBranches, totalProducts, totalUsers, lowStock, pendingInvoices, recentSales] = await Promise.all([
+      this.prisma.sale.count({ where }),
+      this.prisma.sale.count({ where: { ...where, createdAt: { gte: today } } }),
+      this.prisma.sale.aggregate({ where: { ...where, status: SaleStatus.COMPLETED }, _sum: { total: true } }),
+      this.prisma.branch.count(),
+      this.prisma.product.count({ where: { isActive: true } }),
+      this.prisma.user.count(),
+      this.prisma.inventory.count({ where: { quantity: { lte: 10 } } }),
+      this.prisma.invoice.count({ where: { status: { in: ['PENDING', 'SENT'] } } }),
+      this.prisma.sale.findMany({
+        where,
+        take: 10,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          items: { include: { product: true } },
+          branch: { select: { name: true } },
+          user: { select: { firstName: true, lastName: true } },
+        },
+      }),
+    ]);
+
+    return {
+      totalSales,
+      todaySales,
+      totalRevenue: totalRevenue._sum.total || 0,
+      totalBranches,
+      totalProducts,
+      totalUsers,
+      lowStock,
+      pendingInvoices,
+      recentSales,
+    };
+  }
+
+  async getSalesTrend(days: number = 30, user?: any) {
+    const where: any = { status: SaleStatus.COMPLETED };
+    if (user?.role === UserRole.BRANCH_MANAGER) {
+      where.branchId = user.branchId;
+    }
+
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - days);
+    startDate.setHours(0, 0, 0, 0);
 
     const sales = await this.prisma.sale.findMany({
-      where,
-      include: {
-        items: { include: { product: true } },
-        branch: { select: { id: true, name: true, code: true } },
-      },
+      where: { ...where, createdAt: { gte: startDate } },
+      select: { total: true, createdAt: true, type: true },
+      orderBy: { createdAt: 'asc' },
     });
 
-    const totalAmount = sales.reduce((sum, sale) => sum + Number(sale.total), 0);
-    const totalSales = sales.length;
-
-    const byProductType = {
-      lpgRefills: { count: 0, amount: 0 },
-      lpgCylinders: { count: 0, amount: 0 },
-      electronics: { count: 0, amount: 0 },
-      accessories: { count: 0, amount: 0 },
-    };
-
+    // Group by date
+    const grouped = {};
     sales.forEach((sale) => {
-      sale.items.forEach((item) => {
-        const amount = Number(item.total);
-        switch (item.product.type) {
-          case ProductType.LPG_REFILL:
-            byProductType.lpgRefills.count += item.quantity;
-            byProductType.lpgRefills.amount += amount;
-            break;
-          case ProductType.LPG_CYLINDER:
-            byProductType.lpgCylinders.count += item.quantity;
-            byProductType.lpgCylinders.amount += amount;
-            break;
-          case ProductType.ELECTRONICS:
-            byProductType.electronics.count += item.quantity;
-            byProductType.electronics.amount += amount;
-            break;
-          default:
-            byProductType.accessories.count += item.quantity;
-            byProductType.accessories.amount += amount;
-        }
-      });
-    });
-
-    const byBranch = {};
-    sales.forEach((sale) => {
-      const branchName = sale.branch.name;
-      if (!byBranch[branchName]) {
-        byBranch[branchName] = { sales: 0, amount: 0 };
+      const date = sale.createdAt.toISOString().split('T')[0];
+      if (!grouped[date]) {
+        grouped[date] = { date, total: 0, cash: 0, invoice: 0, count: 0 };
       }
-      byBranch[branchName].sales += 1;
-      byBranch[branchName].amount += Number(sale.total);
+      grouped[date].total += Number(sale.total);
+      grouped[date].count += 1;
+      if (sale.type === 'CASH') grouped[date].cash += Number(sale.total);
+      else grouped[date].invoice += Number(sale.total);
     });
 
-    const byDay = {};
-    sales.forEach((sale) => {
-      const date = sale.saleDate.toISOString().split('T')[0];
-      if (!byDay[date]) {
-        byDay[date] = { sales: 0, amount: 0 };
-      }
-      byDay[date].sales += 1;
-      byDay[date].amount += Number(sale.total);
-    });
-
-    return {
-      summary: { totalSales, totalAmount, averageSale: totalSales > 0 ? totalAmount / totalSales : 0 },
-      byProductType,
-      byBranch,
-      byDay,
-      sales,
-    };
+    return Object.values(grouped);
   }
 
-  async getInventoryReport(branchId?: string) {
-    const where = branchId ? { branchId } : {};
-
-    const inventory = await this.prisma.inventory.findMany({
-      where,
+  async getBranchPerformance() {
+    const branches = await this.prisma.branch.findMany({
       include: {
-        product: true,
-        branch: { select: { id: true, name: true, code: true } },
-      },
-    });
-
-    const totalProducts = inventory.length;
-    const lowStockItems = inventory.filter((item) => item.quantity <= item.product.minStockLevel);
-    const outOfStockItems = inventory.filter((item) => item.quantity === 0);
-    const totalValue = inventory.reduce((sum, item) => sum + item.quantity * Number(item.product.price), 0);
-
-    return {
-      summary: { totalProducts, lowStockCount: lowStockItems.length, outOfStockCount: outOfStockItems.length, totalValue },
-      lowStockItems,
-      outOfStockItems,
-      inventory,
-    };
-  }
-
-  async getCylinderReconciliationReport(branchId?: string) {
-    const where: any = { product: { type: ProductType.LPG_REFILL } };
-    if (branchId) where.branchId = branchId;
-
-    const inventory = await this.prisma.inventory.findMany({
-      where,
-      include: { product: true, branch: true },
-    });
-
-    const reconciliation = inventory.map((item) => {
-      const expectedEmpty = item.totalSold - item.totalRefilled;
-      const discrepancy = item.emptyCylinders - expectedEmpty;
-      return {
-        branch: item.branch,
-        product: item.product,
-        fullCylinders: item.fullCylinders,
-        emptyCylinders: item.emptyCylinders,
-        totalRefilled: item.totalRefilled,
-        totalSold: item.totalSold,
-        expectedEmpty,
-        discrepancy,
-        hasDiscrepancy: discrepancy !== 0,
-      };
-    });
-
-    const discrepancies = reconciliation.filter((r) => r.hasDiscrepancy);
-
-    return {
-      summary: { totalTracked: reconciliation.length, discrepanciesFound: discrepancies.length },
-      reconciliation,
-      discrepancies,
-    };
-  }
-
-  async getUserPerformanceReport(startDate: string, endDate: string) {
-    const users = await this.prisma.user.findMany({
-      where: { role: 'BRANCH_MANAGER' },
-      include: {
+        _count: { select: { sales: true, users: true } },
         sales: {
-          where: {
-            saleDate: { gte: new Date(startDate), lte: new Date(endDate) },
-            status: SaleStatus.COMPLETED,
-          },
+          where: { status: SaleStatus.COMPLETED },
+          select: { total: true },
         },
-        branch: true,
       },
     });
 
-    return users.map((user) => ({
-      user: {
-        id: user.id,
-        name: `${user.firstName} ${user.lastName}`,
-        email: user.email,
-        branch: user.branch,
-      },
-      performance: {
-        totalSales: user.sales.length,
-        totalAmount: user.sales.reduce((sum, sale) => sum + Number(sale.total), 0),
-        averageSale: user.sales.length > 0
-          ? user.sales.reduce((sum, sale) => sum + Number(sale.total), 0) / user.sales.length
-          : 0,
-      },
+    return branches.map((branch) => ({
+      id: branch.id,
+      name: branch.name,
+      code: branch.code,
+      totalSales: branch._count.sales,
+      totalRevenue: branch.sales.reduce((sum, s) => sum + Number(s.total), 0),
+      staffCount: branch._count.users,
+      isActive: branch.isActive,
     }));
+  }
+
+  async getProductPerformance() {
+    const products = await this.prisma.product.findMany({
+      where: { isActive: true },
+      include: {
+        saleItems: {
+          select: { quantity: true, total: true },
+        },
+        inventory: true,
+      },
+    });
+
+    return products.map((product) => ({
+      id: product.id,
+      name: product.name,
+      code: product.code,
+      type: product.type,
+      price: product.price,
+      totalSold: product.saleItems.reduce((sum, item) => sum + item.quantity, 0),
+      totalRevenue: product.saleItems.reduce((sum, item) => sum + Number(item.total), 0),
+      currentStock: product.inventory.reduce((sum, inv) => sum + inv.quantity, 0),
+    }));
+  }
+
+  async getExpenseReport(startDate?: string, endDate?: string) {
+    const where: any = {};
+    if (startDate && endDate) {
+      where.createdAt = { gte: new Date(startDate), lte: new Date(endDate) };
+    }
+
+    const expenses = await this.prisma.expense.findMany({
+      where,
+      include: {
+        branch: { select: { name: true } },
+        user: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const byCategory = await this.prisma.expense.groupBy({
+      by: ['category'],
+      where,
+      _sum: { amount: true },
+      _count: { category: true },
+    });
+
+    return { expenses, byCategory, total: expenses.reduce((sum, e) => sum + Number(e.amount), 0) };
+  }
+
+  async getInventoryValuation() {
+    const inventory = await this.prisma.inventory.findMany({
+      include: { product: true, branch: { select: { name: true } } },
+    });
+
+    const totalValue = inventory.reduce(
+      (sum, item) => sum + item.quantity * Number(item.product.price),
+      0,
+    );
+
+    const totalCost = inventory.reduce(
+      (sum, item) => sum + item.quantity * Number(item.product.costPrice || 0),
+      0,
+    );
+
+    return {
+      items: inventory,
+      summary: {
+        totalItems: inventory.length,
+        totalQuantity: inventory.reduce((sum, item) => sum + item.quantity, 0),
+        totalValue,
+        totalCost,
+        potentialProfit: totalValue - totalCost,
+      },
+    };
   }
 }

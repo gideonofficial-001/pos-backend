@@ -1,220 +1,185 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { UserRole } from '@prisma/client';
-import { RestockDto } from './dto/restock.dto';
-import { AdjustStockDto } from './dto/adjust-stock.dto';
+import { UserRole, MovementType } from '@prisma/client';
 
 @Injectable()
 export class InventoryService {
-  constructor(
-    private prisma: PrismaService,
-    private auditLogsService: AuditLogsService,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
-  async getBranchInventory(branchId: string, user: any) {
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) {
-      throw new ForbiddenException('Access denied for this branch');
+  async findAll(query: { branchId?: string; user?: any; lowStock?: boolean }) {
+    const { branchId, user, lowStock } = query;
+    const where: any = {};
+
+    if (branchId) {
+      if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) {
+        throw new ForbiddenException('You can only view your branch inventory');
+      }
+      where.branchId = branchId;
+    } else if (user?.role === UserRole.BRANCH_MANAGER) {
+      where.branchId = user.branchId;
     }
 
-    const inventory = await this.prisma.inventory.findMany({
-      where: { branchId },
+    if (lowStock) {
+      where.quantity = { lte: 10 };
+    }
+
+    return this.prisma.inventory.findMany({
+      where,
+      include: {
+        product: { include: { category: true } },
+        branch: { select: { id: true, name: true, code: true } },
+      },
+      orderBy: { product: { name: 'asc' } },
+    });
+  }
+
+  async findOne(id: string) {
+    const inventory = await this.prisma.inventory.findUnique({
+      where: { id },
+      include: {
+        product: { include: { category: true } },
+        branch: true,
+        stockMovements: {
+          orderBy: { createdAt: 'desc' },
+          take: 20,
+          include: { performedBy: { select: { firstName: true, lastName: true } } },
+        },
+      },
+    });
+
+    if (!inventory) {
+      throw new NotFoundException('Inventory item not found');
+    }
+
+    return inventory;
+  }
+
+  async restock(inventoryId: string, quantity: number, userId: string) {
+    const inventory = await this.prisma.inventory.findUnique({
+      where: { id: inventoryId },
       include: { product: true },
     });
 
-    return inventory.map((item) => ({
-      ...item,
-      isLowStock: item.quantity <= item.product.minStockLevel,
-    }));
+    if (!inventory) {
+      throw new NotFoundException('Inventory item not found');
+    }
+
+    const previousQuantity = inventory.quantity;
+
+    const updated = await this.prisma.inventory.update({
+      where: { id: inventoryId },
+      data: {
+        quantity: { increment: quantity },
+        fullCylinders: inventory.product.type === 'LPG_REFILL'
+          ? { increment: quantity }
+          : undefined,
+        totalRefilled: { increment: quantity },
+        lastRestocked: new Date(),
+      },
+      include: { product: true, branch: true },
+    });
+
+    // Create stock movement record
+    await this.prisma.stockMovement.create({
+      data: {
+        inventoryId,
+        productId: inventory.productId,
+        branchId: inventory.branchId,
+        quantityBefore: previousQuantity,
+        quantityChanged: quantity,
+        quantityAfter: previousQuantity + quantity,
+        movementType: MovementType.RESTOCK,
+        performedById: userId,
+        notes: `Restocked ${quantity} units`,
+      },
+    });
+
+    return updated;
   }
 
-  async getAllInventory() {
-    const inventory = await this.prisma.inventory.findMany({
+  async adjustStock(inventoryId: string, newQuantity: number, reason: string, userId: string) {
+    const inventory = await this.prisma.inventory.findUnique({
+      where: { id: inventoryId },
+      include: { product: true },
+    });
+
+    if (!inventory) {
+      throw new NotFoundException('Inventory item not found');
+    }
+
+    const previousQuantity = inventory.quantity;
+    const difference = newQuantity - previousQuantity;
+
+    const updated = await this.prisma.inventory.update({
+      where: { id: inventoryId },
+      data: {
+        quantity: newQuantity,
+        fullCylinders: inventory.product.type === 'LPG_REFILL' ? newQuantity : undefined,
+      },
+      include: { product: true, branch: true },
+    });
+
+    // Create stock movement record
+    await this.prisma.stockMovement.create({
+      data: {
+        inventoryId,
+        productId: inventory.productId,
+        branchId: inventory.branchId,
+        quantityBefore: previousQuantity,
+        quantityChanged: difference,
+        quantityAfter: newQuantity,
+        movementType: MovementType.ADJUSTMENT,
+        performedById: userId,
+        notes: reason,
+      },
+    });
+
+    // Create stock adjustment record
+    await this.prisma.stockAdjustment.create({
+      data: {
+        inventoryId,
+        type: difference >= 0 ? 'INCREASE' : 'DECREASE',
+        quantity: Math.abs(difference),
+        reason,
+        userId,
+      },
+    });
+
+    return updated;
+  }
+
+  async getLowStock(user?: any) {
+    const where: any = {
+      quantity: { lte: 10 },
+    };
+
+    if (user?.role === UserRole.BRANCH_MANAGER) {
+      where.branchId = user.branchId;
+    }
+
+    return this.prisma.inventory.findMany({
+      where,
       include: {
         product: true,
         branch: { select: { id: true, name: true, code: true } },
       },
-    });
-
-    return inventory.map((item) => ({
-      ...item,
-      isLowStock: item.quantity <= item.product.minStockLevel,
-    }));
-  }
-
-  async getProductInventory(productId: string) {
-    return this.prisma.inventory.findMany({
-      where: { productId },
-      include: {
-        branch: { select: { id: true, name: true, code: true } },
-      },
+      orderBy: { quantity: 'asc' },
     });
   }
 
-  async restock(restockDto: RestockDto, performedBy: string) {
-    const { branchId, productId, quantity, fullCylinders, emptyCylinders, reason } = restockDto;
-
-    const inventory = await this.prisma.inventory.findUnique({
-      where: { branchId_productId: { branchId, productId } },
-      include: { product: true },
-    });
-
-    if (!inventory) {
-      throw new NotFoundException('Inventory record not found');
-    }
-
-    const updateData: any = {
-      quantity: { increment: quantity },
-      lastRestocked: new Date(),
-    };
-
-    if (inventory.product.type === 'LPG_REFILL') {
-      if (fullCylinders !== undefined) {
-        updateData.fullCylinders = { increment: fullCylinders };
-        updateData.totalRefilled = { increment: fullCylinders };
-      }
-      if (emptyCylinders !== undefined) {
-        updateData.emptyCylinders = emptyCylinders;
-      }
-    }
-
-    const updatedInventory = await this.prisma.inventory.update({
-      where: { branchId_productId: { branchId, productId } },
-      data: updateData,
-      include: { product: true, branch: true },
-    });
-
-    await this.prisma.stockAdjustment.create({
-      data: {
-        inventoryId: inventory.id,
-        type: 'RESTOCK',
-        quantity,
-        reason: reason || 'Restocking',
-        performedBy,
-      },
-    });
-
-    await this.auditLogsService.create({
-      userId: performedBy,
-      action: 'STOCK_RESTOCKED',
-      description: `Restocked ${inventory.product.name} at ${updatedInventory.branch.name}`,
-      entityType: 'Inventory',
-      entityId: inventory.id,
-      newValues: restockDto,
-    });
-
-    return updatedInventory;
-  }
-
-  async adjustStock(adjustStockDto: AdjustStockDto, performedBy: string) {
-    const { branchId, productId, quantity, reason } = adjustStockDto;
-
-    const inventory = await this.prisma.inventory.findUnique({
-      where: { branchId_productId: { branchId, productId } },
-      include: { product: true },
-    });
-
-    if (!inventory) {
-      throw new NotFoundException('Inventory record not found');
-    }
-
-    const oldQuantity = inventory.quantity;
-    const newQuantity = oldQuantity + quantity;
-
-    if (newQuantity < 0) {
-      throw new BadRequestException('Adjustment would result in negative stock');
-    }
-
-    const updatedInventory = await this.prisma.inventory.update({
-      where: { branchId_productId: { branchId, productId } },
-      data: { quantity: newQuantity },
-      include: { product: true, branch: true },
-    });
-
-    await this.prisma.stockAdjustment.create({
-      data: {
-        inventoryId: inventory.id,
-        type: 'ADJUSTMENT',
-        quantity,
-        reason,
-        performedBy,
-      },
-    });
-
-    await this.auditLogsService.create({
-      userId: performedBy,
-      action: 'STOCK_ADJUSTED',
-      description: `Adjusted stock for ${inventory.product.name} at ${updatedInventory.branch.name}`,
-      entityType: 'Inventory',
-      entityId: inventory.id,
-      oldValues: { quantity: oldQuantity },
-      newValues: { quantity: newQuantity, reason },
-    });
-
-    return updatedInventory;
-  }
-
-  async getLowStockAlerts() {
-    const allInventory = await this.prisma.inventory.findMany({
-      include: { product: true, branch: { select: { id: true, name: true, code: true } } },
-    });
-
-    return allInventory.filter((item) => item.quantity <= item.product.minStockLevel);
-  }
-
-  async getCylinderReconciliation(branchId?: string) {
-    const where: any = { product: { type: 'LPG_REFILL' } };
+  async getStockMovements(inventoryId?: string, branchId?: string) {
+    const where: any = {};
+    if (inventoryId) where.inventoryId = inventoryId;
     if (branchId) where.branchId = branchId;
 
-    const inventory = await this.prisma.inventory.findMany({
+    return this.prisma.stockMovement.findMany({
       where,
-      include: { product: true, branch: true },
+      include: {
+        inventory: { include: { product: { select: { name: true } } } },
+        performedBy: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
     });
-
-    return inventory.map((item) => {
-      const expectedEmpty = item.totalSold - item.totalRefilled;
-      const discrepancy = item.emptyCylinders - expectedEmpty;
-      return {
-        branch: item.branch,
-        product: item.product,
-        fullCylinders: item.fullCylinders,
-        emptyCylinders: item.emptyCylinders,
-        totalRefilled: item.totalRefilled,
-        totalSold: item.totalSold,
-        expectedEmpty,
-        discrepancy,
-        hasDiscrepancy: discrepancy !== 0,
-      };
-    });
-  }
-
-  async transferStock(fromBranchId: string, toBranchId: string, productId: string, quantity: number, performedBy: string) {
-    const sourceInventory = await this.prisma.inventory.findUnique({
-      where: { branchId_productId: { branchId: fromBranchId, productId } },
-    });
-
-    if (!sourceInventory || sourceInventory.quantity < quantity) {
-      throw new BadRequestException('Insufficient stock in source branch');
-    }
-
-    await this.prisma.inventory.update({
-      where: { branchId_productId: { branchId: fromBranchId, productId } },
-      data: { quantity: { decrement: quantity } },
-    });
-
-    await this.prisma.inventory.update({
-      where: { branchId_productId: { branchId: toBranchId, productId } },
-      data: { quantity: { increment: quantity } },
-    });
-
-    await this.auditLogsService.create({
-      userId: performedBy,
-      action: 'STOCK_ADJUSTED',
-      description: `Transferred stock from ${fromBranchId} to ${toBranchId}`,
-      entityType: 'Inventory',
-      newValues: { fromBranchId, toBranchId, productId, quantity },
-    });
-
-    return { message: 'Stock transferred successfully' };
   }
 }

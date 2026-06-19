@@ -1,41 +1,60 @@
-import { IsString, IsOptional, IsEnum, IsDecimal, IsInt, Min, IsBoolean } from 'class-validator';
+import { IsOptional, IsString, IsEnum, IsNumber, IsBoolean } from 'class-validator';
+import { ApiProperty } from '@nestjs/swagger';
 import { ProductType } from '@prisma/client';
 
 export class UpdateProductDto {
-  @IsString()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
   name?: string;
 
-  @IsString()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
+  code?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
   description?: string;
 
-  @IsEnum(ProductType)
+  @ApiProperty({ enum: ProductType, required: false })
   @IsOptional()
+  @IsEnum(ProductType)
   type?: ProductType;
 
-  @IsDecimal({ decimal_digits: '2' })
+  @ApiProperty({ required: false })
   @IsOptional()
-  price?: string;
-
-  @IsDecimal({ decimal_digits: '2' })
-  @IsOptional()
-  costPrice?: string;
-
   @IsString()
+  categoryId?: string;
+
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsNumber()
+  price?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  costPrice?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
   cylinderSize?: string;
 
-  @IsString()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsString()
   brand?: string;
 
-  @IsInt()
-  @Min(0)
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsNumber()
   minStockLevel?: number;
 
-  @IsBoolean()
+  @ApiProperty({ required: false })
   @IsOptional()
+  @IsBoolean()
   isActive?: boolean;
 }

@@ -1,96 +1,123 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { UserRole, InvoiceStatus } from '@prisma/client';
+import { InvoiceStatus } from '@prisma/client';
 import { CreateInvoiceDto } from './dto/create-invoice.dto';
 
 @Injectable()
 export class InvoicesService {
   constructor(
     private prisma: PrismaService,
-    private auditLogsService: AuditLogsService,
     private notificationsService: NotificationsService,
   ) {}
 
   async create(createInvoiceDto: CreateInvoiceDto, user: any) {
-    const { branchId, customerName, customerPhone, customerEmail, amount, dueDate, notes } = createInvoiceDto;
+    const { branchId, customerId, customerName, customerPhone, customerEmail, amount, dueDate, notes } = createInvoiceDto;
 
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) {
-      throw new ForbiddenException('Access denied for this branch');
+    // Validate customer if customerId is provided
+    if (customerId) {
+      const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+      if (!customer) {
+        throw new NotFoundException('Customer not found');
+      }
+      if (!customer.isInvoiceEligible) {
+        throw new BadRequestException('This customer is not eligible for invoicing');
+      }
     }
 
-    const year = new Date().getFullYear();
-    const randomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
-    const invoiceCode = `INV-${randomCode}-${year}`;
+    // Generate invoice code
+    const count = await this.prisma.invoice.count();
+    const invoiceCode = `INV-${String(count + 1).padStart(5, '0')}`;
 
     const invoice = await this.prisma.invoice.create({
       data: {
         invoiceCode,
         branchId,
         userId: user.userId,
+        customerId,
         customerName,
         customerPhone,
         customerEmail,
         amount,
         dueDate: new Date(dueDate),
-        status: InvoiceStatus.PENDING,
         notes,
       },
       include: {
-        branch: true,
-        user: { select: { id: true, firstName: true, lastName: true } },
+        branch: { select: { name: true } },
+        customer: true,
+        user: { select: { firstName: true, lastName: true } },
       },
     });
 
-    await this.notificationsService.sendInvoiceNotification(invoice);
+    // Update customer outstanding balance
+    if (customerId) {
+      await this.prisma.customer.update({
+        where: { id: customerId },
+        data: { outstandingBalance: { increment: amount } },
+      });
+    }
 
-    await this.auditLogsService.create({
+    // Create notification
+    await this.notificationsService.create({
+      type: 'INVOICE_CREATED',
+      title: 'New Invoice Created',
+      message: `Invoice ${invoiceCode} for KES ${Number(amount).toFixed(2)} - ${customerName}`,
       userId: user.userId,
-      action: 'INVOICE_CREATED',
-      description: `Created invoice ${invoiceCode} for ${customerName}`,
-      entityType: 'Invoice',
       entityId: invoice.id,
-      newValues: createInvoiceDto,
+      entityType: 'Invoice',
+    });
+
+    // Create activity feed entry
+    await this.prisma.activityFeed.create({
+      data: {
+        actorId: user.userId,
+        actorName: `${user.firstName} ${user.lastName}`,
+        branchId,
+        title: 'Invoice Created',
+        message: `Invoice ${invoiceCode} for KES ${Number(amount).toFixed(2)} - ${customerName}`,
+        entityId: invoice.id,
+        entityType: 'Invoice',
+        visibleToAdmin: true,
+        visibleToBranch: true,
+      },
     });
 
     return invoice;
   }
 
-  async findAll(query: { branchId?: string; status?: InvoiceStatus; user?: any }) {
-    const { branchId, status, user } = query;
+  async findAll(query?: { branchId?: string; status?: string; overdue?: boolean; user?: any }) {
     const where: any = {};
 
-    if (branchId) {
-      if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) {
-        throw new ForbiddenException('Access denied for this branch');
-      }
-      where.branchId = branchId;
-    } else if (user.role === UserRole.BRANCH_MANAGER) {
-      where.branchId = user.branchId;
+    if (query?.branchId) {
+      where.branchId = query.branchId;
     }
-
-    if (status) {
-      where.status = status;
+    if (query?.status) {
+      where.status = query.status;
+    }
+    if (query?.overdue) {
+      where.status = { in: ['PENDING', 'SENT'] };
+      where.dueDate = { lt: new Date() };
     }
 
     return this.prisma.invoice.findMany({
       where,
       include: {
         branch: { select: { id: true, name: true, code: true } },
-        user: { select: { id: true, firstName: true, lastName: true } },
+        customer: true,
+        user: { select: { firstName: true, lastName: true } },
         sale: true,
       },
       orderBy: { createdAt: 'desc' },
     });
   }
 
-  async findOne(id: string, user: any) {
+  async findOne(id: string) {
     const invoice = await this.prisma.invoice.findUnique({
       where: { id },
       include: {
         branch: true,
-        user: { select: { id: true, firstName: true, lastName: true } },
+        customer: true,
+        user: { select: { firstName: true, lastName: true } },
         sale: { include: { items: { include: { product: true } } } },
       },
     });
@@ -99,74 +126,60 @@ export class InvoicesService {
       throw new NotFoundException('Invoice not found');
     }
 
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== invoice.branchId) {
-      throw new ForbiddenException('Access denied for this invoice');
-    }
-
     return invoice;
   }
 
-  async markAsPaid(id: string, user: any) {
+  async updateStatus(id: string, status: InvoiceStatus, userId: string) {
     const invoice = await this.prisma.invoice.findUnique({ where: { id } });
     if (!invoice) {
       throw new NotFoundException('Invoice not found');
     }
 
-    if (invoice.status === InvoiceStatus.PAID) {
-      throw new BadRequestException('Invoice is already paid');
-    }
-
-    const updatedInvoice = await this.prisma.invoice.update({
+    const updated = await this.prisma.invoice.update({
       where: { id },
-      data: { status: InvoiceStatus.PAID },
+      data: { status },
       include: {
         branch: true,
-        user: { select: { id: true, firstName: true, lastName: true } },
+        customer: true,
       },
     });
 
-    await this.auditLogsService.create({
-      userId: user.userId,
-      action: 'INVOICE_PAID',
-      description: `Marked invoice ${invoice.invoiceCode} as paid`,
-      entityType: 'Invoice',
-      entityId: id,
-      oldValues: { status: invoice.status },
-      newValues: { status: InvoiceStatus.PAID },
-    });
+    // If paid, reduce customer outstanding balance
+    if (status === 'PAID' && invoice.customerId) {
+      await this.prisma.customer.update({
+        where: { id: invoice.customerId },
+        data: { outstandingBalance: { decrement: invoice.amount } },
+      });
+    }
 
-    return updatedInvoice;
+    return updated;
   }
 
-  async cancel(id: string, user: any) {
-    const invoice = await this.prisma.invoice.findUnique({ where: { id } });
-    if (!invoice) {
-      throw new NotFoundException('Invoice not found');
-    }
-
-    if (invoice.status === InvoiceStatus.PAID) {
-      throw new BadRequestException('Cannot cancel a paid invoice');
-    }
-
-    const updatedInvoice = await this.prisma.invoice.update({
-      where: { id },
-      data: { status: InvoiceStatus.CANCELLED },
-      include: {
-        branch: true,
-        user: { select: { id: true, firstName: true, lastName: true } },
+  async getOverdueInvoices() {
+    return this.prisma.invoice.findMany({
+      where: {
+        status: { in: ['PENDING', 'SENT'] },
+        dueDate: { lt: new Date() },
       },
+      include: {
+        branch: { select: { name: true } },
+        customer: true,
+      },
+      orderBy: { dueDate: 'asc' },
     });
+  }
 
-    await this.auditLogsService.create({
-      userId: user.userId,
-      action: 'INVOICE_CREATED',
-      description: `Cancelled invoice ${invoice.invoiceCode}`,
-      entityType: 'Invoice',
-      entityId: id,
-      oldValues: { status: invoice.status },
-      newValues: { status: InvoiceStatus.CANCELLED },
-    });
+  async getInvoiceSummary() {
+    const [total, paid, pending, overdue, totalAmount] = await Promise.all([
+      this.prisma.invoice.count(),
+      this.prisma.invoice.count({ where: { status: 'PAID' } }),
+      this.prisma.invoice.count({ where: { status: { in: ['PENDING', 'SENT'] } } }),
+      this.prisma.invoice.count({
+        where: { status: { in: ['PENDING', 'SENT'] }, dueDate: { lt: new Date() } },
+      }),
+      this.prisma.invoice.aggregate({ _sum: { amount: true } }),
+    ]);
 
-    return updatedInvoice;
+    return { total, paid, pending, overdue, totalAmount: totalAmount._sum.amount || 0 };
   }
 }

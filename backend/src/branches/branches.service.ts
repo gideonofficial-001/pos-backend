@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { CreateBranchDto } from './dto/create-branch.dto';
@@ -12,24 +12,37 @@ export class BranchesService {
   ) {}
 
   async create(createBranchDto: CreateBranchDto, performedBy: string) {
-    const branch = await this.prisma.branch.create({ data: createBranchDto });
+    const existing = await this.prisma.branch.findUnique({
+      where: { code: createBranchDto.code },
+    });
+    if (existing) {
+      throw new ConflictException(`Branch with code ${createBranchDto.code} already exists`);
+    }
+
+    const branch = await this.prisma.branch.create({
+      data: createBranchDto,
+      include: { manager: { select: { id: true, firstName: true, lastName: true, email: true } } },
+    });
+
     await this.auditLogsService.create({
       userId: performedBy,
       action: 'BRANCH_CREATED',
-      description: `Created branch ${branch.name}`,
+      description: `Created branch ${branch.name} (${branch.code})`,
       entityType: 'Branch',
       entityId: branch.id,
       newValues: createBranchDto,
     });
+
     return branch;
   }
 
   async findAll() {
     return this.prisma.branch.findMany({
       include: {
-        _count: { select: { users: true, inventory: true } },
+        manager: { select: { id: true, firstName: true, lastName: true, email: true } },
+        _count: { select: { users: true, inventory: true, sales: true } },
       },
-      orderBy: { name: 'asc' },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
@@ -37,18 +50,20 @@ export class BranchesService {
     const branch = await this.prisma.branch.findUnique({
       where: { id },
       include: {
+        manager: { select: { id: true, firstName: true, lastName: true, email: true } },
         users: { select: { id: true, firstName: true, lastName: true, email: true, role: true } },
-        inventory: { include: { product: true } },
+        inventory: {
+          include: { product: true },
+        },
+        _count: { select: { sales: true } },
       },
     });
+
     if (!branch) {
       throw new NotFoundException('Branch not found');
     }
-    return branch;
-  }
 
-  async findByCode(code: string) {
-    return this.prisma.branch.findUnique({ where: { code } });
+    return branch;
   }
 
   async update(id: string, updateBranchDto: UpdateBranchDto, performedBy: string) {
@@ -57,9 +72,10 @@ export class BranchesService {
       throw new NotFoundException('Branch not found');
     }
 
-    const updatedBranch = await this.prisma.branch.update({
+    const updated = await this.prisma.branch.update({
       where: { id },
       data: updateBranchDto,
+      include: { manager: { select: { id: true, firstName: true, lastName: true, email: true } } },
     });
 
     await this.auditLogsService.create({
@@ -72,34 +88,54 @@ export class BranchesService {
       newValues: updateBranchDto,
     });
 
-    return updatedBranch;
+    return updated;
   }
 
-  async remove(id: string, performedBy: string) {
-    const branch = await this.prisma.branch.findUnique({
-      where: { id },
-      include: { _count: { select: { users: true } } },
-    });
-
+  async toggleStatus(id: string, performedBy: string) {
+    const branch = await this.prisma.branch.findUnique({ where: { id } });
     if (!branch) {
       throw new NotFoundException('Branch not found');
     }
 
-    if (branch._count.users > 0) {
-      throw new NotFoundException('Cannot delete branch with assigned users');
-    }
-
-    await this.prisma.branch.delete({ where: { id } });
-
-    await this.auditLogsService.create({
-      userId: performedBy,
-      action: 'BRANCH_UPDATED',
-      description: `Deleted branch ${branch.name}`,
-      entityType: 'Branch',
-      entityId: id,
-      oldValues: branch,
+    const updated = await this.prisma.branch.update({
+      where: { id },
+      data: { isActive: !branch.isActive },
     });
 
-    return { message: 'Branch deleted successfully' };
+    return updated;
+  }
+
+  async getBranchInventory(id: string) {
+    const branch = await this.prisma.branch.findUnique({ where: { id } });
+    if (!branch) {
+      throw new NotFoundException('Branch not found');
+    }
+
+    return this.prisma.inventory.findMany({
+      where: { branchId: id },
+      include: { product: { include: { category: true } } },
+      orderBy: { product: { name: 'asc' } },
+    });
+  }
+
+  async getBranchSales(id: string, startDate?: string, endDate?: string) {
+    const branch = await this.prisma.branch.findUnique({ where: { id } });
+    if (!branch) {
+      throw new NotFoundException('Branch not found');
+    }
+
+    const where: any = { branchId: id };
+    if (startDate && endDate) {
+      where.createdAt = { gte: new Date(startDate), lte: new Date(endDate) };
+    }
+
+    return this.prisma.sale.findMany({
+      where,
+      include: {
+        items: { include: { product: true } },
+        user: { select: { firstName: true, lastName: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 }

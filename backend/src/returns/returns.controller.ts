@@ -1,44 +1,59 @@
 import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ReturnsService } from './returns.service';
 import { CreateReturnDto } from './dto/create-return.dto';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
-import { UserRole, ReturnStatus } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 
+@ApiTags('Returns')
 @Controller('returns')
-@UseGuards(AuthGuard(), RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@ApiBearerAuth()
 export class ReturnsController {
   constructor(private returnsService: ReturnsService) {}
 
   @Post()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
+  @Roles(UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Create return request' })
   async create(@Body() createReturnDto: CreateReturnDto, @GetUser() user: any) {
     return this.returnsService.create(createReturnDto, user);
   }
 
   @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
-  async findAll(@Query('status') status?: ReturnStatus, @GetUser() user?: any) {
-    return this.returnsService.findAll({ status, user });
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Get all return requests' })
+  async findAll(
+    @Query('branchId') branchId?: string,
+    @Query('status') status?: string,
+    @GetUser() user?: any,
+  ) {
+    return this.returnsService.findAll({ branchId, status, user });
   }
 
   @Get(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
-  async findOne(@Param('id') id: string, @GetUser() user: any) {
-    return this.returnsService.findOne(id, user);
+  @ApiOperation({ summary: 'Get return by ID' })
+  async findOne(@Param('id') id: string) {
+    return this.returnsService.findOne(id);
   }
 
   @Patch(':id/approve')
   @Roles(UserRole.SUPER_ADMIN)
-  async approve(@Param('id') id: string, @GetUser() user: any) {
-    return this.returnsService.approve(id, user);
+  @ApiOperation({ summary: 'Approve return (Admin only)' })
+  async approve(@Param('id') id: string, @GetUser('userId') userId: string) {
+    return this.returnsService.approve(id, userId);
   }
 
   @Patch(':id/reject')
   @Roles(UserRole.SUPER_ADMIN)
-  async reject(@Param('id') id: string, @Body('reason') reason: string, @GetUser() user: any) {
-    return this.returnsService.reject(id, reason, user);
+  @ApiOperation({ summary: 'Reject return (Admin only)' })
+  async reject(
+    @Param('id') id: string,
+    @Body('rejectionReason') rejectionReason: string,
+    @GetUser('userId') userId: string,
+  ) {
+    return this.returnsService.reject(id, userId, rejectionReason);
   }
 }

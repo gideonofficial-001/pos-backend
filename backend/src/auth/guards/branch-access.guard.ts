@@ -1,4 +1,5 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 
 @Injectable()
 export class BranchAccessGuard implements CanActivate {
@@ -9,18 +10,30 @@ export class BranchAccessGuard implements CanActivate {
     const params = request.params;
 
     if (!user) {
-      throw new ForbiddenException('User not authenticated');
+      throw new ForbiddenException('Authentication required');
     }
 
-    if (user.role === 'SUPER_ADMIN' || user.role === 'OVERALL_MANAGER') {
+    // Super Admin and Overall Manager can access all branches
+    if (user.role === UserRole.SUPER_ADMIN || user.role === UserRole.OVERALL_MANAGER) {
       return true;
     }
 
-    const targetBranchId = body.branchId || params.branchId || body.branch;
-    if (targetBranchId && targetBranchId !== user.branchId) {
-      throw new ForbiddenException('Access denied for this branch');
+    // Branch Manager can only access their assigned branch
+    if (user.role === UserRole.BRANCH_MANAGER) {
+      const requestedBranchId = body?.branchId || params?.branchId || request.query?.branchId;
+
+      if (requestedBranchId && requestedBranchId !== user.branchId) {
+        throw new ForbiddenException('You can only access your assigned branch');
+      }
+
+      // Attach branchId to body if not provided
+      if (!requestedBranchId && user.branchId) {
+        request.body.branchId = user.branchId;
+      }
+
+      return true;
     }
 
-    return true;
+    return false;
   }
 }
