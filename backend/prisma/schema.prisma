@@ -172,7 +172,7 @@ model User {
   auditLogs            AuditLog[]
   expenses             Expense[]
   transfersInitiated   Transfer[]           @relation("InitiatedBy")
-  transfersApproved    Transfer[]           @relation("ApprovedBy")
+  transfersApproved    Transfer[]           @relation("TransferApprovedBy")
   approvedDevices      Device[]             @relation("ApprovedBy")
   approvedReturns      Return[]             @relation("ReturnApprovedBy")
   approvedExpenses     Expense[]            @relation("ExpenseApprovedBy")
@@ -202,7 +202,7 @@ model Device {
   approvedBy     User?        @relation("ApprovedBy", fields: [approvedById], references: [id])
   approvedAt     DateTime?
 
-  authCode       String?
+  authCodeHash   String?
   authCodeExpiry DateTime?
 
   lastUsedAt   DateTime     @default(now())
@@ -501,9 +501,8 @@ model Transfer {
   initiatedBy String
   initiator   User   @relation("InitiatedBy", fields: [initiatedBy], references: [id])
 
-    approvedById String?
+  approvedById String?
   approvedBy   User?   @relation("TransferApprovedBy", fields: [approvedById], references: [id])
-
 
   status          TransferStatus @default(PENDING)
   notes           String?
@@ -558,7 +557,6 @@ model RefillVerification {
 }
 
 // ─── Inventory Ledger ────────────────────────────────────────────────────────
-// Complete audit trail of every stock movement.
 
 model StockMovement {
   id String @id @default(uuid())
