@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { DeviceStatus } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
+import * as bcrypt from 'bcrypt';
 
 @Injectable()
 export class DevicesService {
@@ -38,13 +39,22 @@ export class DevicesService {
   }
 
   async requestAuthorization(userId: string, fingerprint: string, deviceInfo: { ipAddress: string; userAgent: string }) {
-    // Check if device already exists
+    // Check if the specific device already exists
     const existingDevice = await this.prisma.device.findUnique({
       where: { userId_fingerprint: { userId, fingerprint } },
     });
 
     if (existingDevice) {
       return { requestId: existingDevice.id, status: existingDevice.status };
+    }
+
+    // Business Logic: Enforce 1 Approved Device Per User limit
+    const approvedDevicesCount = await this.prisma.device.count({
+      where: { userId, status: DeviceStatus.APPROVED },
+    });
+
+    if (approvedDevicesCount >= 1) {
+      throw new UnauthorizedException('Security limit reached: User already has an active approved device.');
     }
 
     // Create new device request
@@ -81,8 +91,11 @@ export class DevicesService {
       throw new NotFoundException('Device not found');
     }
 
-    // Generate 6-digit code
+    // Generate 6-digit code and hash it
     const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const salt = await bcrypt.genSalt(10);
+    const hashedCode = await bcrypt.hash(code, salt);
+    
     const expiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
 
     await this.prisma.device.update({
@@ -91,12 +104,12 @@ export class DevicesService {
         status: DeviceStatus.APPROVED,
         approvedById,
         approvedAt: new Date(),
-        authCode: code,
+        authCodeHash: hashedCode,
         authCodeExpiry: expiry,
       },
     });
 
-    // Send code via email
+    // Send the raw code via email
     try {
       const transporter = this.getMailTransporter();
       await transporter.sendMail({
@@ -129,7 +142,7 @@ export class DevicesService {
       entityId: deviceId,
     });
 
-    return { code, message: 'Device approved and code sent to user email' };
+    return { message: 'Device approved and code sent to user email' };
   }
 
   async verifyAuthorizationCode(requestId: string, code: string) {
@@ -141,7 +154,13 @@ export class DevicesService {
       return { valid: false, message: 'Device not approved' };
     }
 
-    if (!device.authCode || device.authCode !== code) {
+    if (!device.authCodeHash) {
+      return { valid: false, message: 'Invalid authorization code' };
+    }
+
+    // Compare the raw code input with the stored hash
+    const isCodeValid = await bcrypt.compare(code, device.authCodeHash);
+    if (!isCodeValid) {
       return { valid: false, message: 'Invalid authorization code' };
     }
 
@@ -152,16 +171,18 @@ export class DevicesService {
     // Clear the code after successful use (single-use)
     await this.prisma.device.update({
       where: { id: requestId },
-      data: { authCode: null, authCodeExpiry: null },
+      data: { authCodeHash: null, authCodeExpiry: null },
     });
 
     return { valid: true, userId: device.userId };
   }
 
   async updateLastUsed(fingerprint: string) {
-    const device = await this.prisma.device.findUnique({
+    // Changed to findFirst since fingerprint alone is no longer globally unique
+    const device = await this.prisma.device.findFirst({
       where: { fingerprint },
     });
+    
     if (device) {
       await this.prisma.device.update({
         where: { id: device.id },
