@@ -502,7 +502,7 @@ model Transfer {
   initiator   User   @relation("InitiatedBy", fields: [initiatedBy], references: [id])
 
   approvedById String?
-  approvedBy   User?   @relation("TransferApprovedBy", fields: [approvedById], references: [id])
+  approvedBy   User?   @relation("TransferApprovedBy", fields: [TransferApprovedById], references: [id])
 
   status          TransferStatus @default(PENDING)
   notes           String?
