@@ -68,10 +68,9 @@ export class InventoryController {
   @ApiOperation({ summary: 'Adjust stock quantity (Admin only)' })
   async adjustStock(
     @Param('id') id: string,
-    @Body('quantity') quantity: number,
-    @Body('reason') reason: string,
+    @Body() payload: { quantity?: number; fullCylinders?: number; emptyCylinders?: number; reason: string },
     @GetUser('userId') userId: string,
   ) {
-    return this.inventoryService.adjustStock(id, quantity, reason, userId);
+    return this.inventoryService.adjustStock(id, payload, userId);
   }
 }
