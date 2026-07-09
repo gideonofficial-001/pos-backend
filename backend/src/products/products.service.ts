@@ -12,18 +12,36 @@ export class ProductsService {
   ) {}
 
   async create(createProductDto: CreateProductDto, performedBy: string) {
+    // 1. Create the base product
     const product = await this.prisma.product.create({
       data: createProductDto,
       include: { category: true },
     });
 
+    // 2. Automatically seed this product into ALL branches with 0 stock
+    const branches = await this.prisma.branch.findMany();
+    
+    if (branches.length > 0) {
+      const inventoryData = branches.map((branch) => ({
+        branchId: branch.id,
+        productId: product.id,
+        quantity: 0,
+        minimumQuantity: product.minStockLevel || 10,
+      }));
+
+      await this.prisma.inventory.createMany({
+        data: inventoryData,
+      });
+    }
+
+    // 3. Log the action
     await this.auditLogsService.create({
       userId: performedBy,
       action: 'PRODUCT_CREATED',
-      description: `Created product ${product.name} (${product.code})`,
+      description: `Created product ${product.name} (${product.code}) and initialized inventory across ${branches.length} branches.`,
       entityType: 'Product',
       entityId: product.id,
-      newValues: createProductDto,
+      newValues: createProductDto as any,
     });
 
     return product;
@@ -87,11 +105,33 @@ export class ProductsService {
       description: `Updated product ${product.name}`,
       entityType: 'Product',
       entityId: id,
-      oldValues: product,
-      newValues: updateProductDto,
+      oldValues: product as any,
+      newValues: updateProductDto as any,
     });
 
     return updated;
+  }
+
+  async delete(id: string, performedBy: string) {
+    const product = await this.prisma.product.findUnique({ where: { id } });
+    if (!product) {
+      throw new NotFoundException('Product not found');
+    }
+
+    // Because of onDelete: Cascade in schema.prisma, this safely deletes 
+    // all linked Inventory records globally without throwing errors.
+    await this.prisma.product.delete({ where: { id } });
+
+    await this.auditLogsService.create({
+      userId: performedBy,
+      action: 'PRODUCT_DELETED',
+      description: `Deleted product ${product.name} globally`,
+      entityType: 'Product',
+      entityId: id,
+      oldValues: product as any,
+    });
+
+    return { message: 'Product and associated inventory deleted successfully' };
   }
 
   async toggleStatus(id: string) {
