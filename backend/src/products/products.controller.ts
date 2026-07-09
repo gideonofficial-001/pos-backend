@@ -77,6 +77,13 @@ export class ProductsController {
     return this.productsService.update(id, updateProductDto, userId);
   }
 
+  @Delete(':id')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete product (Admin only)' })
+  async delete(@Param('id') id: string, @GetUser('userId') userId: string) {
+    return this.productsService.delete(id, userId);
+  }
+
   @Patch(':id/toggle')
   @Roles(UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Toggle product active status' })
