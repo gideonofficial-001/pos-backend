@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRole, MovementType } from '@prisma/client';
 
@@ -50,7 +50,6 @@ export class InventoryService {
     if (!inventory) {
       throw new NotFoundException('Inventory item not found');
     }
-
     return inventory;
   }
 
@@ -70,16 +69,13 @@ export class InventoryService {
       where: { id: inventoryId },
       data: {
         quantity: { increment: quantity },
-        fullCylinders: inventory.product.type === 'LPG_REFILL'
-          ? { increment: quantity }
-          : undefined,
+        fullCylinders: inventory.product.type === 'LPG_REFILL' ? { increment: quantity } : undefined,
         totalRefilled: { increment: quantity },
         lastRestocked: new Date(),
       },
       include: { product: true, branch: true },
     });
 
-    // Create stock movement record
     await this.prisma.stockMovement.create({
       data: {
         inventoryId,
@@ -97,29 +93,46 @@ export class InventoryService {
     return updated;
   }
 
-  async adjustStock(inventoryId: string, newQuantity: number, reason: string, userId: string) {
+  async adjustStock(
+    inventoryId: string, 
+    payload: { quantity?: number; fullCylinders?: number; emptyCylinders?: number; reason: string }, 
+    userId: string
+  ) {
     const inventory = await this.prisma.inventory.findUnique({
       where: { id: inventoryId },
-      include: { product: true },
+      include: { product: { include: { category: true } } },
     });
 
     if (!inventory) {
       throw new NotFoundException('Inventory item not found');
     }
 
+    const isLpg = inventory.product.category?.name.toUpperCase().includes('LPG');
     const previousQuantity = inventory.quantity;
+    
+    let newQuantity = payload.quantity ?? previousQuantity;
+    let newFull = inventory.fullCylinders;
+    let newEmpty = inventory.emptyCylinders;
+
+    // Dual-column logic for LPG
+    if (isLpg && payload.fullCylinders !== undefined && payload.emptyCylinders !== undefined) {
+      newFull = payload.fullCylinders;
+      newEmpty = payload.emptyCylinders;
+      newQuantity = newFull + newEmpty; // Total shells is always Full + Empty
+    }
+
     const difference = newQuantity - previousQuantity;
 
     const updated = await this.prisma.inventory.update({
       where: { id: inventoryId },
       data: {
         quantity: newQuantity,
-        fullCylinders: inventory.product.type === 'LPG_REFILL' ? newQuantity : undefined,
+        fullCylinders: newFull,
+        emptyCylinders: newEmpty,
       },
       include: { product: true, branch: true },
     });
 
-    // Create stock movement record
     await this.prisma.stockMovement.create({
       data: {
         inventoryId,
@@ -130,17 +143,16 @@ export class InventoryService {
         quantityAfter: newQuantity,
         movementType: MovementType.ADJUSTMENT,
         performedById: userId,
-        notes: reason,
+        notes: payload.reason,
       },
     });
 
-    // Create stock adjustment record
     await this.prisma.stockAdjustment.create({
       data: {
         inventoryId,
         type: difference >= 0 ? 'INCREASE' : 'DECREASE',
         quantity: Math.abs(difference),
-        reason,
+        reason: payload.reason,
         userId,
       },
     });
@@ -149,10 +161,7 @@ export class InventoryService {
   }
 
   async getLowStock(user?: any) {
-    const where: any = {
-      quantity: { lte: 10 },
-    };
-
+    const where: any = { quantity: { lte: 10 } };
     if (user?.role === UserRole.BRANCH_MANAGER) {
       where.branchId = user.branchId;
     }
