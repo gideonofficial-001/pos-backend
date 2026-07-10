@@ -16,45 +16,42 @@ export class SalesService {
   async create(createSaleDto: CreateSaleDto, user: any) {
     const { branchId, type, customerId, customerName, customerPhone, items, discount = 0, notes } = createSaleDto;
 
-    // Validate branch access
     if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) {
       throw new ForbiddenException('You can only create sales for your assigned branch');
     }
 
-    // Calculate sale date (sales after 9PM count as next day)
     const now = new Date();
     const currentHour = now.getHours();
-    const saleDate = currentHour >= 21
-      ? new Date(now.setDate(now.getDate() + 1))
-      : now;
+    const saleDate = currentHour >= 21 ? new Date(now.setDate(now.getDate() + 1)) : now;
 
-    // Validate stock availability
+    // 1. VALIDATION PHASE
     for (const item of items) {
       const inventory = await this.prisma.inventory.findUnique({
         where: { branchId_productId: { branchId, productId: item.productId } },
         include: { product: true },
       });
 
-      if (!inventory) {
-        throw new BadRequestException(`Product not found in branch inventory`);
-      }
+      if (!inventory) throw new BadRequestException(`Product not found in branch inventory`);
 
-      if (inventory.quantity < item.quantity) {
-        throw new BadRequestException(
-          `Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}, Requested: ${item.quantity}`,
-        );
+      // For LPG (Refills or New Cylinders), check fullCylinders instead of total quantity
+      if (inventory.product.type === ProductType.LPG_REFILL || inventory.product.type === ProductType.LPG_CYLINDER) {
+        if (inventory.fullCylinders < item.quantity) {
+          throw new BadRequestException(`Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders}`);
+        }
+      } else {
+        // Standard products
+        if (inventory.quantity < item.quantity) {
+          throw new BadRequestException(`Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}`);
+        }
       }
     }
 
-    // Calculate totals
+    // 2. CALCULATION PHASE
     let subtotal = 0;
     const saleItems = [];
 
     for (const item of items) {
-      const product = await this.prisma.product.findUnique({
-        where: { id: item.productId },
-      });
-
+      const product = await this.prisma.product.findUnique({ where: { id: item.productId } });
       const total = Number(product.price) * item.quantity;
       subtotal += total;
 
@@ -67,73 +64,42 @@ export class SalesService {
       });
     }
 
-    const tax = 0;
-    const finalDiscount = Math.min(discount, subtotal); // Ensure discount doesn't exceed subtotal
-    const total = subtotal + tax - finalDiscount;
+    const finalDiscount = Math.min(discount, subtotal); 
+    const total = subtotal - finalDiscount;
 
-    // Generate unique 6-character sale code
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     let saleCode = '';
-    for (let i = 0; i < 6; i++) {
-      saleCode += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
+    do {
+      saleCode = Array.from({ length: 6 }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
+    } while (await this.prisma.sale.findUnique({ where: { saleCode } }));
 
-    // Check for duplicate sale code
-    const existing = await this.prisma.sale.findUnique({ where: { saleCode } });
-    if (existing) {
-      // Regenerate if duplicate
-      saleCode = '';
-      for (let i = 0; i < 6; i++) {
-        saleCode += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-    }
-
-    // Create sale in transaction
+    // 3. TRANSACTION & DEDUCTION PHASE
     const sale = await this.prisma.$transaction(async (tx) => {
-      // Create the sale
       const newSale = await tx.sale.create({
         data: {
-          saleCode,
-          branchId,
-          userId: user.userId,
-          customerId,
-          type,
-          status: SaleStatus.COMPLETED,
-          customerName,
-          customerPhone,
-          subtotal,
-          tax,
-          discount: finalDiscount,
-          total,
-          saleDate,
-          notes,
+          saleCode, branchId, userId: user.userId, customerId, type, status: SaleStatus.COMPLETED,
+          customerName, customerPhone, subtotal, tax: 0, discount: finalDiscount, total, saleDate, notes,
           items: { create: saleItems },
         },
-        include: {
-          items: { include: { product: true } },
-          branch: true,
-          user: { select: { id: true, firstName: true, lastName: true } },
-        },
+        include: { items: { include: { product: true } }, branch: true, user: { select: { id: true, firstName: true, lastName: true } } },
       });
 
-      // Update inventory for each item
       for (const item of items) {
-        const product = await tx.product.findUnique({
-          where: { id: item.productId },
-        });
+        const product = await tx.product.findUnique({ where: { id: item.productId } });
+        const inventory = await tx.inventory.findUnique({ where: { branchId_productId: { branchId, productId: item.productId } } });
 
-        const inventory = await tx.inventory.findUnique({
-          where: { branchId_productId: { branchId, productId: item.productId } },
-        });
+        const updateData: any = { totalSold: { increment: item.quantity } };
 
-        const updateData: any = {
-          quantity: { decrement: item.quantity },
-          totalSold: { increment: item.quantity },
-        };
-
+        // THE SWAP LOGIC
         if (product.type === ProductType.LPG_REFILL) {
           updateData.fullCylinders = { decrement: item.quantity };
           updateData.emptyCylinders = { increment: item.quantity };
+          // Notice: quantity is NOT decremented here because total shells remains the same.
+        } else if (product.type === ProductType.LPG_CYLINDER) {
+          updateData.fullCylinders = { decrement: item.quantity };
+          updateData.quantity = { decrement: item.quantity }; // Shell leaves the shop
+        } else {
+          updateData.quantity = { decrement: item.quantity }; // Standard product deduction
         }
 
         await tx.inventory.update({
@@ -141,63 +107,37 @@ export class SalesService {
           data: updateData,
         });
 
-        // Create stock movement record
         await tx.stockMovement.create({
           data: {
-            inventoryId: inventory.id,
-            productId: item.productId,
-            branchId,
+            inventoryId: inventory.id, productId: item.productId, branchId,
             quantityBefore: inventory.quantity,
-            quantityChanged: -item.quantity,
-            quantityAfter: inventory.quantity - item.quantity,
-            movementType: MovementType.SALE,
-            referenceId: newSale.id,
-            referenceType: 'Sale',
-            performedById: user.userId,
-            notes: `Sale ${saleCode}`,
+            quantityChanged: product.type === ProductType.LPG_REFILL ? 0 : -item.quantity, // Refills don't change physical shell count
+            quantityAfter: product.type === ProductType.LPG_REFILL ? inventory.quantity : inventory.quantity - item.quantity,
+            movementType: MovementType.SALE, referenceId: newSale.id, referenceType: 'Sale', performedById: user.userId, notes: `Sale ${saleCode}`,
           },
         });
       }
-
       return newSale;
     });
 
-    // Create audit log
+    // 4. LOGGING PHASE
     await this.auditLogsService.create({
-      userId: user.userId,
-      action: 'SALE_CREATED',
-      description: `Created ${type} sale ${saleCode} for KES ${total.toFixed(2)}`,
-      entityType: 'Sale',
-      entityId: sale.id,
-      newValues: { type, total, items: saleItems },
+      userId: user.userId, action: 'SALE_CREATED', description: `Created ${type} sale ${saleCode} for KES ${total.toFixed(2)}`,
+      entityType: 'Sale', entityId: sale.id, newValues: { type, total, items: saleItems },
     });
 
-    // Create activity feed entry
     await this.prisma.activityFeed.create({
       data: {
-        actorId: user.userId,
-        actorName: `${user.firstName} ${user.lastName}`,
-        branchId: sale.branchId,
-        branchName: sale.branch.name,
-        title: 'Sale Completed',
-        message: `${type} sale ${saleCode} for KES ${total.toFixed(2)}`,
-        entityId: sale.id,
-        entityType: 'Sale',
-        actionUrl: `/sales-history`,
-        visibleToAdmin: true,
-        visibleToBranch: true,
+        actorId: user.userId, actorName: `${user.firstName} ${user.lastName}`, branchId: sale.branchId, branchName: sale.branch.name,
+        title: 'Sale Completed', message: `${type} sale ${saleCode} for KES ${total.toFixed(2)}`, entityId: sale.id, entityType: 'Sale',
+        actionUrl: `/sales-history`, visibleToAdmin: true, visibleToBranch: true,
       },
     });
 
-    // Send notification for invoice sales
     if (type === SaleType.INVOICE) {
       await this.notificationsService.create({
-        type: 'INVOICE_CREATED',
-        title: 'New Invoice Sale',
-        message: `Invoice sale ${saleCode} created for KES ${total.toFixed(2)}`,
-        userId: user.userId,
-        entityId: sale.id,
-        entityType: 'Sale',
+        type: 'INVOICE_CREATED', title: 'New Invoice Sale', message: `Invoice sale ${saleCode} created for KES ${total.toFixed(2)}`,
+        userId: user.userId, entityId: sale.id, entityType: 'Sale',
       });
     }
 
@@ -209,34 +149,19 @@ export class SalesService {
     const where: any = {};
 
     if (branchId) {
-      if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) {
-        throw new ForbiddenException('You can only view your branch sales');
-      }
+      if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) throw new ForbiddenException('You can only view your branch sales');
       where.branchId = branchId;
     } else if (user.role === UserRole.BRANCH_MANAGER) {
       where.branchId = user.branchId;
     }
 
-    if (startDate && endDate) {
-      where.createdAt = { gte: new Date(startDate), lte: new Date(endDate) };
-    }
-
-    if (type) {
-      where.type = type;
-    }
-
-    if (search) {
-      where.saleCode = { contains: search, mode: 'insensitive' };
-    }
+    if (startDate && endDate) where.createdAt = { gte: new Date(startDate), lte: new Date(endDate) };
+    if (type) where.type = type;
+    if (search) where.saleCode = { contains: search, mode: 'insensitive' };
 
     return this.prisma.sale.findMany({
       where,
-      include: {
-        items: { include: { product: true } },
-        branch: { select: { id: true, name: true, code: true } },
-        user: { select: { id: true, firstName: true, lastName: true } },
-        customer: { select: { id: true, fullName: true, phone: true } },
-      },
+      include: { items: { include: { product: true } }, branch: { select: { id: true, name: true, code: true } }, user: { select: { id: true, firstName: true, lastName: true } }, customer: { select: { id: true, fullName: true, phone: true } } },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -244,45 +169,22 @@ export class SalesService {
   async findOne(id: string, user?: any) {
     const sale = await this.prisma.sale.findUnique({
       where: { id },
-      include: {
-        items: { include: { product: true } },
-        branch: true,
-        user: { select: { id: true, firstName: true, lastName: true } },
-        customer: true,
-        returns: true,
-      },
+      include: { items: { include: { product: true } }, branch: true, user: { select: { id: true, firstName: true, lastName: true } }, customer: true, returns: true },
     });
 
-    if (!sale) {
-      throw new NotFoundException('Sale not found');
-    }
-
-    if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) {
-      throw new ForbiddenException('You can only view your branch sales');
-    }
-
+    if (!sale) throw new NotFoundException('Sale not found');
+    if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) throw new ForbiddenException('You can only view your branch sales');
     return sale;
   }
 
   async findByCode(saleCode: string, user?: any) {
     const sale = await this.prisma.sale.findUnique({
       where: { saleCode },
-      include: {
-        items: { include: { product: true } },
-        branch: true,
-        user: { select: { id: true, firstName: true, lastName: true } },
-        returns: true,
-      },
+      include: { items: { include: { product: true } }, branch: true, user: { select: { id: true, firstName: true, lastName: true } }, returns: true },
     });
 
-    if (!sale) {
-      throw new NotFoundException('Sale not found');
-    }
-
-    if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) {
-      throw new ForbiddenException('You can only view your branch sales');
-    }
-
+    if (!sale) throw new NotFoundException('Sale not found');
+    if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) throw new ForbiddenException('You can only view your branch sales');
     return sale;
   }
 
@@ -291,51 +193,28 @@ export class SalesService {
     const targetYear = year || now.getFullYear();
     const targetWeek = week || this.getWeekNumber(now);
 
-    // Calculate week start and end dates
     const weekStart = this.getWeekStartDate(targetYear, targetWeek);
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 6);
     weekEnd.setHours(23, 59, 59, 999);
 
-    const where: any = {
-      createdAt: { gte: weekStart, lte: weekEnd },
-      status: SaleStatus.COMPLETED,
-    };
-
-    if (user?.role === UserRole.BRANCH_MANAGER) {
-      where.branchId = user.branchId;
-    }
+    const where: any = { createdAt: { gte: weekStart, lte: weekEnd }, status: SaleStatus.COMPLETED };
+    if (user?.role === UserRole.BRANCH_MANAGER) where.branchId = user.branchId;
 
     const sales = await this.prisma.sale.findMany({
       where,
-      include: {
-        items: { include: { product: true } },
-        branch: { select: { name: true } },
-        user: { select: { firstName: true, lastName: true } },
-      },
+      include: { items: { include: { product: true } }, branch: { select: { name: true } }, user: { select: { firstName: true, lastName: true } } },
       orderBy: { createdAt: 'desc' },
     });
 
-    // Group by date
     const groupedByDate = {};
     sales.forEach((sale) => {
       const date = sale.createdAt.toISOString().split('T')[0];
-      if (!groupedByDate[date]) {
-        groupedByDate[date] = [];
-      }
+      if (!groupedByDate[date]) groupedByDate[date] = [];
       groupedByDate[date].push(sale);
     });
 
-    return {
-      weekStart: weekStart.toISOString().split('T')[0],
-      weekEnd: weekEnd.toISOString().split('T')[0],
-      weekNumber: targetWeek,
-      year: targetYear,
-      totalSales: sales.length,
-      totalAmount: sales.reduce((sum, s) => sum + Number(s.total), 0),
-      groupedByDate,
-      sales,
-    };
+    return { weekStart: weekStart.toISOString().split('T')[0], weekEnd: weekEnd.toISOString().split('T')[0], weekNumber: targetWeek, year: targetYear, totalSales: sales.length, totalAmount: sales.reduce((sum, s) => sum + Number(s.total), 0), groupedByDate, sales };
   }
 
   private getWeekNumber(date: Date): number {
