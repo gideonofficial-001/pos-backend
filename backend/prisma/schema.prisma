@@ -299,8 +299,6 @@ model Inventory {
 
   quantity       Int  @default(0)
   fullCylinders  Int?
-  emptyCylinders Int?
-
   minimumQuantity Int @default(10)
 
   totalRefilled Int  @default(0)
