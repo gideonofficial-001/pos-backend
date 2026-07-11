@@ -15,18 +15,21 @@ import { ShoppingCart, Minus, Plus, Trash2, Search, Package, Flame, Tag } from '
 
 const NewSale = () => {
   const { user } = useAuthStore()
-  const { items, addItem, removeItem, updateQuantity, clearCart, getSubtotal, getTotal, customerName, customerPhone, setCustomerInfo, discount, setDiscount } = useCartStore()
+  const { 
+    items, addItem, removeItem, updateQuantity, clearCart, 
+    getSubtotal, getTotal, customerName, customerPhone, 
+    setCustomerInfo, discount, setDiscount 
+  } = useCartStore()
+  
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [saleType, setSaleType] = useState<SaleType>(SaleType.CASH)
 
-  // Modal States for LPG Option 1
   const [lpgModalOpen, setLpgModalOpen] = useState(false)
   const [selectedInvItem, setSelectedInvItem] = useState<any>(null)
 
   const branchId = user?.branchId || ''
 
-  // Fetch Inventory
   const { data: inventory } = useQuery({
     queryKey: ['inventory', branchId],
     queryFn: async () => {
@@ -37,7 +40,6 @@ const NewSale = () => {
     enabled: !!branchId,
   })
 
-  // Fetch Customers for Invoices
   const { data: customers } = useQuery({
     queryKey: ['customers'],
     queryFn: async () => {
@@ -47,13 +49,12 @@ const NewSale = () => {
     enabled: saleType === SaleType.INVOICE,
   })
 
-  // Checkout Mutation
   const createSaleMutation = useMutation({
     mutationFn: (data: any) => salesApi.create(data),
     onSuccess: (response) => {
       toast.success(`Sale completed! Code: ${response.data.saleCode}`)
       clearCart()
-      setSearch('') // Clear search on success
+      setSearch('') 
       queryClient.invalidateQueries({ queryKey: ['sales'] })
       queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
       queryClient.invalidateQueries({ queryKey: ['inventory'] })
@@ -63,7 +64,6 @@ const NewSale = () => {
     },
   })
 
-  // The Clean Search Architecture: Only show products if typing
   const filteredInventory = search.trim() === '' 
     ? [] 
     : inventory?.filter((inv: any) => {
@@ -87,7 +87,6 @@ const NewSale = () => {
       customerPhone: customerPhone || undefined, 
       discount,
       items: items.map(item => ({ 
-        // If we attached a custom ID for empties/sets, strip it back to the real DB ID before saving
         productId: item.productId.split('-')[0], 
         quantity: item.quantity 
       })),
@@ -96,7 +95,6 @@ const NewSale = () => {
     createSaleMutation.mutate(saleData)
   }
 
-  // LPG Option 1 Modal Handler
   const handleLpgSelect = (type: 'REFILL' | 'EMPTY' | 'BOTH') => {
     if (!selectedInvItem) return;
     
@@ -111,7 +109,6 @@ const NewSale = () => {
       }
     } else if (type === 'EMPTY') {
       if (selectedInvItem.emptyCylinders > 0) {
-        // Mocking the KES 3500 price for UI testing
         addItem({ ...p, id: p.id + '-empty', name: `${p.name} (Empty Shell)`, price: 3500 }, 1)
         toast.success(`Added ${p.name} Empty Shell`)
       } else {
@@ -127,7 +124,7 @@ const NewSale = () => {
     }
     
     setLpgModalOpen(false)
-    setSearch('') // Auto-clear search after adding item
+    setSearch('')
   }
 
   return (
@@ -151,7 +148,6 @@ const NewSale = () => {
             />
           </div>
 
-          {/* Clean State: If search is empty */}
           {search.trim() === '' ? (
             <div className="flex flex-col items-center justify-center py-20 px-4 text-center border-2 border-dashed rounded-xl bg-muted/10">
               <div className="bg-primary/10 p-4 rounded-full mb-4">
@@ -167,8 +163,6 @@ const NewSale = () => {
               {filteredInventory?.map((inv: any) => {
                 const product = inv.product;
                 const isLpg = product.type === 'LPG_REFILL' || product.type === 'LPG_CYLINDER';
-                
-                // Smart Stock Hint
                 const availableStock = isLpg ? (inv.fullCylinders || 0) : inv.quantity;
                 const isOutOfStock = availableStock === 0;
 
@@ -183,7 +177,7 @@ const NewSale = () => {
                       } else {
                         if (!isOutOfStock) {
                           addItem(product, 1)
-                          setSearch('') // Auto clear on add
+                          setSearch('')
                         } else {
                           toast.error('Out of stock!')
                         }
@@ -204,11 +198,10 @@ const NewSale = () => {
                 )
               })}
 
-              {/* No Results State */}
               {filteredInventory?.length === 0 && (
                 <div className="col-span-full text-center py-12 text-muted-foreground border rounded-lg bg-muted/20">
                   <Package className="w-12 h-12 mx-auto mb-4 opacity-30" />
-                  <p>No products found matching "{search}"</p>
+                  <p>No products found matching &quot;{search}&quot;</p>
                 </div>
               )}
             </div>
@@ -302,7 +295,7 @@ const NewSale = () => {
         </div>
       </div>
 
-      {/* The Option 1 LPG Modal */}
+      {/* The LPG Selection Modal */}
       <Dialog open={lpgModalOpen} onOpenChange={setLpgModalOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
