@@ -1,7 +1,7 @@
 import { IsNotEmpty, IsString, IsOptional, IsEnum, IsNumber, IsArray, ValidateNested, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { SaleType } from '@prisma/client';
+import { SaleType, LpgSaleVariant } from '@prisma/client';
 
 class SaleItemDto {
   @ApiProperty()
@@ -14,6 +14,11 @@ class SaleItemDto {
   @IsNumber()
   @Min(1, { message: 'Quantity must be at least 1' })
   quantity: number;
+
+  @ApiProperty({ enum: LpgSaleVariant, required: false })
+  @IsOptional()
+  @IsEnum(LpgSaleVariant, { message: 'lpgVariant must be REFILL, EMPTY_SHELL, or COMPLETE_SET' })
+  lpgVariant?: LpgSaleVariant;
 }
 
 export class CreateSaleDto {
