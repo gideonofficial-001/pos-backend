@@ -122,7 +122,6 @@ async function main() {
           productId: product.id,
           quantity: 20, // Total physical shells (20 full + 0 empty = 20)
           fullCylinders: 20,
-          emptyCylinders: 0,
         },
       });
     }
