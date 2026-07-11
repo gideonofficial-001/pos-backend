@@ -34,11 +34,13 @@ export class SalesService {
       if (!inventory) throw new BadRequestException(`Product not found in branch inventory`);
 
       const variant = this.resolveVariant(inventory.product.type, item.lpgVariant);
+      // Empty cylinders are derived — never stored — as total shells minus full ones.
+      const availableEmpty = inventory.fullCylinders != null ? inventory.quantity - inventory.fullCylinders : 0;
 
       if (variant === LpgSaleVariant.EMPTY_SHELL) {
-        if ((inventory.emptyCylinders ?? 0) < item.quantity) {
+        if (availableEmpty < item.quantity) {
           throw new BadRequestException(
-            `Insufficient empty shells for ${inventory.product.name}. Available: ${inventory.emptyCylinders ?? 0}`,
+            `Insufficient empty shells for ${inventory.product.name}. Available: ${availableEmpty}`,
           );
         }
         if (inventory.product.emptyPrice == null) {
@@ -120,17 +122,19 @@ export class SalesService {
 
         if (product.type === ProductType.LPG_REFILL) {
           if (variant === LpgSaleVariant.REFILL) {
-            // Customer swaps an empty shell for a full one — total shell count is unchanged.
+            // Customer trades an empty shell for a full one. fullCylinders drops;
+            // total shells (quantity) is unchanged, so the derived empty count
+            // rises on its own — no separate field to update.
             updateData.fullCylinders = { decrement: item.quantity };
-            updateData.emptyCylinders = { increment: item.quantity };
             quantityChanged = 0;
           } else if (variant === LpgSaleVariant.EMPTY_SHELL) {
-            // Selling a loose empty shell — nothing to do with fullCylinders.
-            updateData.emptyCylinders = { decrement: item.quantity };
+            // A loose empty shell leaves the branch. fullCylinders is untouched;
+            // total shells drops, so the derived empty count falls to match.
             updateData.quantity = { decrement: item.quantity };
             quantityChanged = -item.quantity;
           } else if (variant === LpgSaleVariant.COMPLETE_SET) {
-            // Customer takes a brand-new full cylinder and leaves nothing behind.
+            // A full cylinder leaves and nothing comes back — both totals drop
+            // together, so the derived empty count is unaffected.
             updateData.fullCylinders = { decrement: item.quantity };
             updateData.quantity = { decrement: item.quantity };
             quantityChanged = -item.quantity;
