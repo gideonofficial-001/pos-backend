@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { UserRole, SaleType, SaleStatus, MovementType, ProductType } from '@prisma/client';
+import { UserRole, SaleType, SaleStatus, MovementType, ProductType, LpgSaleVariant } from '@prisma/client';
 import { CreateSaleDto } from './dto/create-sale.dto';
 
 @Injectable()
@@ -33,9 +33,27 @@ export class SalesService {
 
       if (!inventory) throw new BadRequestException(`Product not found in branch inventory`);
 
-      if (inventory.product.type === ProductType.LPG_REFILL || inventory.product.type === ProductType.LPG_CYLINDER) {
-        if (inventory.fullCylinders < item.quantity) {
-          throw new BadRequestException(`Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders}`);
+      const variant = this.resolveVariant(inventory.product.type, item.lpgVariant);
+
+      if (variant === LpgSaleVariant.EMPTY_SHELL) {
+        if ((inventory.emptyCylinders ?? 0) < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient empty shells for ${inventory.product.name}. Available: ${inventory.emptyCylinders ?? 0}`,
+          );
+        }
+        if (inventory.product.emptyPrice == null) {
+          throw new BadRequestException(`Empty shell price is not configured for ${inventory.product.name}`);
+        }
+      } else if (variant === LpgSaleVariant.REFILL || variant === LpgSaleVariant.COMPLETE_SET || inventory.product.type === ProductType.LPG_CYLINDER) {
+        if ((inventory.fullCylinders ?? 0) < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders ?? 0}`,
+          );
+        }
+        if (variant === LpgSaleVariant.COMPLETE_SET && inventory.product.emptyPrice == null) {
+          throw new BadRequestException(
+            `Empty shell price is not configured for ${inventory.product.name}, so a Complete Set price cannot be calculated`,
+          );
         }
       } else {
         if (inventory.quantity < item.quantity) {
@@ -50,19 +68,29 @@ export class SalesService {
 
     for (const item of items) {
       const product = await this.prisma.product.findUnique({ where: { id: item.productId } });
-      const total = Number(product.price) * item.quantity;
+      const variant = this.resolveVariant(product.type, item.lpgVariant);
+
+      let unitPrice = Number(product.price);
+      if (variant === LpgSaleVariant.EMPTY_SHELL) {
+        unitPrice = Number(product.emptyPrice);
+      } else if (variant === LpgSaleVariant.COMPLETE_SET) {
+        unitPrice = Number(product.price) + Number(product.emptyPrice);
+      }
+
+      const total = unitPrice * item.quantity;
       subtotal += total;
 
       saleItems.push({
         productId: item.productId,
         quantity: item.quantity,
-        unitPrice: product.price,
+        unitPrice,
         total,
-        isRefill: product.type === ProductType.LPG_REFILL,
+        isRefill: variant === LpgSaleVariant.REFILL,
+        lpgVariant: variant ?? undefined,
       });
     }
 
-    const finalDiscount = Math.min(discount, subtotal); 
+    const finalDiscount = Math.min(discount, subtotal);
     const total = subtotal - finalDiscount;
 
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -85,12 +113,28 @@ export class SalesService {
       for (const item of items) {
         const product = await tx.product.findUnique({ where: { id: item.productId } });
         const inventory = await tx.inventory.findUnique({ where: { branchId_productId: { branchId, productId: item.productId } } });
+        const variant = this.resolveVariant(product.type, item.lpgVariant);
 
         const updateData: any = { totalSold: { increment: item.quantity } };
+        let quantityChanged = -item.quantity;
 
         if (product.type === ProductType.LPG_REFILL) {
-          updateData.fullCylinders = { decrement: item.quantity };
-          updateData.emptyCylinders = { increment: item.quantity };
+          if (variant === LpgSaleVariant.REFILL) {
+            // Customer swaps an empty shell for a full one — total shell count is unchanged.
+            updateData.fullCylinders = { decrement: item.quantity };
+            updateData.emptyCylinders = { increment: item.quantity };
+            quantityChanged = 0;
+          } else if (variant === LpgSaleVariant.EMPTY_SHELL) {
+            // Selling a loose empty shell — nothing to do with fullCylinders.
+            updateData.emptyCylinders = { decrement: item.quantity };
+            updateData.quantity = { decrement: item.quantity };
+            quantityChanged = -item.quantity;
+          } else if (variant === LpgSaleVariant.COMPLETE_SET) {
+            // Customer takes a brand-new full cylinder and leaves nothing behind.
+            updateData.fullCylinders = { decrement: item.quantity };
+            updateData.quantity = { decrement: item.quantity };
+            quantityChanged = -item.quantity;
+          }
         } else if (product.type === ProductType.LPG_CYLINDER) {
           updateData.fullCylinders = { decrement: item.quantity };
           updateData.quantity = { decrement: item.quantity };
@@ -107,9 +151,10 @@ export class SalesService {
           data: {
             inventoryId: inventory.id, productId: item.productId, branchId,
             quantityBefore: inventory.quantity,
-            quantityChanged: product.type === ProductType.LPG_REFILL ? 0 : -item.quantity,
-            quantityAfter: product.type === ProductType.LPG_REFILL ? inventory.quantity : inventory.quantity - item.quantity,
-            movementType: MovementType.SALE, referenceId: newSale.id, referenceType: 'Sale', performedById: user.userId, notes: `Sale ${saleCode}`,
+            quantityChanged,
+            quantityAfter: inventory.quantity + quantityChanged,
+            movementType: MovementType.SALE, referenceId: newSale.id, referenceType: 'Sale', performedById: user.userId,
+            notes: `Sale ${saleCode}${variant ? ` (${variant})` : ''}`,
           },
         });
       }
@@ -227,5 +272,13 @@ export class SalesService {
     const firstMonday = new Date(januaryFourth);
     firstMonday.setDate(januaryFourth.getDate() - januaryFourthDay + 1);
     return new Date(firstMonday.getTime() + (week - 1) * 7 * 86400000);
+  }
+
+  // Only LPG_REFILL products carry a variant. Everything else ignores it.
+  // If a variant wasn't sent (older clients), default to a plain REFILL
+  // so existing behavior for that type doesn't change.
+  private resolveVariant(productType: ProductType, requested?: LpgSaleVariant): LpgSaleVariant | null {
+    if (productType !== ProductType.LPG_REFILL) return null;
+    return requested ?? LpgSaleVariant.REFILL;
   }
 }
