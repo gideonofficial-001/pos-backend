@@ -40,6 +40,13 @@ enum SaleStatus {
   CANCELLED
 }
 
+// NEW ENUM: Tracks exactly what type of LPG transaction occurred
+enum LpgSaleVariant {
+  REFILL
+  EMPTY_SHELL
+  COMPLETE_SET
+}
+
 enum InvoiceStatus {
   PENDING
   SENT
@@ -130,18 +137,16 @@ enum PaymentProvider {
   BANK
 }
 
-// Movement types for the inventory ledger
 enum MovementType {
-  SALE // Stock reduced by a sale
-  RETURN // Stock increased by a return
-  TRANSFER_OUT // Stock reduced by outgoing transfer
-  TRANSFER_IN // Stock increased by incoming transfer
-  RESTOCK // Stock increased by restocking
-  ADJUSTMENT // Manual stock adjustment
-  OPENING // Initial stock entry
+  SALE
+  RETURN
+  TRANSFER_OUT
+  TRANSFER_IN
+  RESTOCK
+  ADJUSTMENT
+  OPENING
 }
 
-// Activity feed actor types
 enum ActivityActor {
   USER
   SYSTEM
@@ -263,13 +268,13 @@ model Product {
   category          ProductCategory? @relation(fields: [categoryId], references: [id])
 
   price             Decimal          @db.Decimal(10, 2)
+  emptyPrice        Decimal?         @db.Decimal(10, 2) // NEW FIELD: Price for selling empty shells
   costPrice         Decimal?         @db.Decimal(10, 2)
 
   cylinderSize      String?
   brand             String?
   isCylinderTracked Boolean          @default(false)
 
-  // Global fallback minimum — overridden per branch in Inventory.minimumQuantity
   minStockLevel     Int              @default(10)
 
   inventory     Inventory[]
@@ -296,7 +301,6 @@ model Inventory {
   fullCylinders  Int?
   emptyCylinders Int?
 
-  // Per-branch minimum threshold — overrides Product.minStockLevel
   minimumQuantity Int @default(10)
 
   totalRefilled Int  @default(0)
@@ -391,7 +395,8 @@ model SaleItem {
   unitPrice Decimal @db.Decimal(10, 2)
   total     Decimal @db.Decimal(10, 2)
 
-  isRefill Boolean @default(false)
+  isRefill   Boolean @default(false)
+  lpgVariant LpgSaleVariant? // NEW FIELD: Tracks REFILL, EMPTY_SHELL, or COMPLETE_SET
 
   createdAt DateTime @default(now())
 
@@ -556,8 +561,6 @@ model RefillVerification {
   @@map("refill_verifications")
 }
 
-// ─── Inventory Ledger ────────────────────────────────────────────────────────
-
 model StockMovement {
   id String @id @default(uuid())
 
@@ -588,8 +591,6 @@ model StockMovement {
   @@index([createdAt])
   @@map("stock_movements")
 }
-
-// ─── Branch Daily Closing ────────────────────────────────────────────────────
 
 model BranchClosing {
   id String @id @default(uuid())
@@ -622,8 +623,6 @@ model BranchClosing {
   @@map("branch_closings")
 }
 
-// ─── System Settings ─────────────────────────────────────────────────────────
-
 model SystemSetting {
   id    String @id @default(uuid())
   key   String @unique
@@ -637,8 +636,6 @@ model SystemSetting {
 
   @@map("system_settings")
 }
-
-// ─── Activity Feed ───────────────────────────────────────────────────────────
 
 model ActivityFeed {
   id String @id @default(uuid())
@@ -669,8 +666,6 @@ model ActivityFeed {
   @@map("activity_feed")
 }
 
-// ─── Audit Logs ──────────────────────────────────────────────────────────────
-
 model AuditLog {
   id String @id @default(uuid())
 
@@ -696,8 +691,6 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// ─── Notifications ───────────────────────────────────────────────────────────
-
 model Notification {
   id        String @id @default(uuid())
   type      NotificationType
@@ -722,8 +715,6 @@ model Notification {
   @@map("notifications")
 }
 
-// ─── Stock Adjustments ───────────────────────────────────────────────────────
-
 model StockAdjustment {
   id String @id @default(uuid())
 
@@ -744,8 +735,6 @@ model StockAdjustment {
 
   @@map("stock_adjustments")
 }
-
-// ─── Daily Sales Summary ─────────────────────────────────────────────────────
 
 model DailySalesSummary {
   id String @id @default(uuid())
