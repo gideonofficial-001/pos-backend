@@ -1,10 +1,22 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRole, MovementType } from '@prisma/client';
 
 @Injectable()
 export class InventoryService {
   constructor(private prisma: PrismaService) {}
+
+  // Empty cylinders are never stored — always derived as total shells
+  // (quantity) minus shells currently holding gas (fullCylinders). This
+  // keeps the two numbers from ever drifting apart, and matches reality
+  // across every transaction type (restock, refill swap, empty-shell sale,
+  // complete-set sale) with no extra bookkeeping anywhere else.
+  private withComputedEmptyCylinders<T extends { quantity: number; fullCylinders: number | null }>(item: T) {
+    return {
+      ...item,
+      emptyCylinders: item.fullCylinders != null ? item.quantity - item.fullCylinders : null,
+    };
+  }
 
   async findAll(query: { branchId?: string; user?: any; lowStock?: boolean }) {
     const { branchId, user, lowStock } = query;
@@ -23,7 +35,7 @@ export class InventoryService {
       where.quantity = { lte: 10 };
     }
 
-    return this.prisma.inventory.findMany({
+    const items = await this.prisma.inventory.findMany({
       where,
       include: {
         product: { include: { category: true } },
@@ -31,6 +43,8 @@ export class InventoryService {
       },
       orderBy: { product: { name: 'asc' } },
     });
+
+    return items.map(item => this.withComputedEmptyCylinders(item));
   }
 
   async findOne(id: string) {
@@ -50,7 +64,8 @@ export class InventoryService {
     if (!inventory) {
       throw new NotFoundException('Inventory item not found');
     }
-    return inventory;
+
+    return this.withComputedEmptyCylinders(inventory);
   }
 
   async restock(inventoryId: string, quantity: number, userId: string) {
@@ -69,6 +84,8 @@ export class InventoryService {
       where: { id: inventoryId },
       data: {
         quantity: { increment: quantity },
+        // A restock brings in shells that are already full, so both totals
+        // rise together — the derived empty count is untouched.
         fullCylinders: inventory.product.type === 'LPG_REFILL' ? { increment: quantity } : undefined,
         totalRefilled: { increment: quantity },
         lastRestocked: new Date(),
@@ -90,35 +107,33 @@ export class InventoryService {
       },
     });
 
-    return updated;
+    return this.withComputedEmptyCylinders(updated);
   }
 
   async adjustStock(
-    inventoryId: string, 
-    payload: { quantity?: number; fullCylinders?: number; emptyCylinders?: number; reason: string }, 
-    userId: string
+    inventoryId: string,
+    payload: { quantity?: number; fullCylinders?: number; reason: string },
+    userId: string,
   ) {
     const inventory = await this.prisma.inventory.findUnique({
       where: { id: inventoryId },
-      include: { product: { include: { category: true } } },
+      include: { product: true },
     });
 
     if (!inventory) {
       throw new NotFoundException('Inventory item not found');
     }
 
-    const isLpg = inventory.product.category?.name.toUpperCase().includes('LPG');
+    // Whether this product tracks the full/empty cylinder split at all.
+    // (Replaces the old category-name string match with a direct data check.)
+    const tracksCylinders = inventory.fullCylinders != null;
     const previousQuantity = inventory.quantity;
-    
-    let newQuantity = payload.quantity ?? previousQuantity;
-    let newFull = inventory.fullCylinders;
-    let newEmpty = inventory.emptyCylinders;
 
-    // Dual-column logic for LPG
-    if (isLpg && payload.fullCylinders !== undefined && payload.emptyCylinders !== undefined) {
-      newFull = payload.fullCylinders;
-      newEmpty = payload.emptyCylinders;
-      newQuantity = newFull + newEmpty; // Total shells is always Full + Empty
+    const newQuantity = payload.quantity ?? previousQuantity;
+    const newFull = tracksCylinders ? payload.fullCylinders ?? inventory.fullCylinders! : undefined;
+
+    if (tracksCylinders && newFull! > newQuantity) {
+      throw new BadRequestException('Full cylinders cannot exceed total shells');
     }
 
     const difference = newQuantity - previousQuantity;
@@ -128,7 +143,6 @@ export class InventoryService {
       data: {
         quantity: newQuantity,
         fullCylinders: newFull,
-        emptyCylinders: newEmpty,
       },
       include: { product: true, branch: true },
     });
@@ -157,16 +171,19 @@ export class InventoryService {
       },
     });
 
-    return updated;
+    return this.withComputedEmptyCylinders(updated);
   }
 
   async getLowStock(user?: any) {
-    const where: any = { quantity: { lte: 10 } };
+    const where: any = {
+      quantity: { lte: 10 },
+    };
+
     if (user?.role === UserRole.BRANCH_MANAGER) {
       where.branchId = user.branchId;
     }
 
-    return this.prisma.inventory.findMany({
+    const items = await this.prisma.inventory.findMany({
       where,
       include: {
         product: true,
@@ -174,6 +191,8 @@ export class InventoryService {
       },
       orderBy: { quantity: 'asc' },
     });
+
+    return items.map(item => this.withComputedEmptyCylinders(item));
   }
 
   async getStockMovements(inventoryId?: string, branchId?: string) {
