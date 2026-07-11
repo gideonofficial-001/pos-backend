@@ -1,354 +1,231 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { inventoryApi, salesApi, customersApi } from '@/api'
-import { useAuthStore, useCartStore } from '@/store'
-import { SaleType } from '@/types'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { formatCurrency } from '@/lib/utils'
-import { toast } from 'sonner'
-import { ShoppingCart, Minus, Plus, Trash2, Search, Package, Flame, Tag } from 'lucide-react'
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { UserRole, SaleType, SaleStatus, MovementType, ProductType } from '@prisma/client';
+import { CreateSaleDto } from './dto/create-sale.dto';
 
-const NewSale = () => {
-  const { user } = useAuthStore()
-  const { 
-    items, addItem, removeItem, updateQuantity, clearCart, 
-    getSubtotal, getTotal, customerName, customerPhone, 
-    setCustomerInfo, discount, setDiscount 
-  } = useCartStore()
-  
-  const queryClient = useQueryClient()
-  const [search, setSearch] = useState('')
-  const [saleType, setSaleType] = useState<SaleType>(SaleType.CASH)
+@Injectable()
+export class SalesService {
+  constructor(
+    private prisma: PrismaService,
+    private auditLogsService: AuditLogsService,
+    private notificationsService: NotificationsService,
+  ) {}
 
-  const [lpgModalOpen, setLpgModalOpen] = useState(false)
-  const [selectedInvItem, setSelectedInvItem] = useState<any>(null)
+  async create(createSaleDto: CreateSaleDto, user: any) {
+    const { branchId, type, customerId, customerName, customerPhone, items, discount = 0, notes } = createSaleDto;
 
-  const branchId = user?.branchId || ''
-
-  const { data: inventory } = useQuery({
-    queryKey: ['inventory', branchId],
-    queryFn: async () => {
-      if (!branchId) return []
-      const response = await inventoryApi.getAll({ branchId })
-      return response.data
-    },
-    enabled: !!branchId,
-  })
-
-  const { data: customers } = useQuery({
-    queryKey: ['customers'],
-    queryFn: async () => {
-      const response = await customersApi.getAll({ isInvoiceEligible: true })
-      return response.data
-    },
-    enabled: saleType === SaleType.INVOICE,
-  })
-
-  const createSaleMutation = useMutation({
-    mutationFn: (data: any) => salesApi.create(data),
-    onSuccess: (response) => {
-      toast.success(`Sale completed! Code: ${response.data.saleCode}`)
-      clearCart()
-      setSearch('') 
-      queryClient.invalidateQueries({ queryKey: ['sales'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      queryClient.invalidateQueries({ queryKey: ['inventory'] })
-    },
-    onError: (error: any) => {
-      toast.error(error.response?.data?.message || 'Failed to create sale')
-    },
-  })
-
-  const filteredInventory = search.trim() === '' 
-    ? [] 
-    : inventory?.filter((inv: any) => {
-        if (!inv.product?.isActive) return false;
-        return (
-          inv.product.name.toLowerCase().includes(search.toLowerCase()) ||
-          inv.product.code.toLowerCase().includes(search.toLowerCase())
-        )
-      })
-
-  const handleCheckout = () => {
-    if (items.length === 0) {
-      toast.error('Cart is empty')
-      return
+    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) {
+      throw new ForbiddenException('You can only create sales for your assigned branch');
     }
 
-    const saleData = {
-      branchId, 
-      type: saleType, 
-      customerName: customerName || undefined, 
-      customerPhone: customerPhone || undefined, 
-      discount,
-      items: items.map(item => ({ 
-        productId: item.productId.split('-')[0], 
-        quantity: item.quantity 
-      })),
+    const now = new Date();
+    const currentHour = now.getHours();
+    const saleDate = currentHour >= 21 ? new Date(now.setDate(now.getDate() + 1)) : now;
+
+    // 1. VALIDATION PHASE
+    for (const item of items) {
+      const inventory = await this.prisma.inventory.findUnique({
+        where: { branchId_productId: { branchId, productId: item.productId } },
+        include: { product: true },
+      });
+
+      if (!inventory) throw new BadRequestException(`Product not found in branch inventory`);
+
+      if (inventory.product.type === ProductType.LPG_REFILL || inventory.product.type === ProductType.LPG_CYLINDER) {
+        if (inventory.fullCylinders < item.quantity) {
+          throw new BadRequestException(`Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders}`);
+        }
+      } else {
+        if (inventory.quantity < item.quantity) {
+          throw new BadRequestException(`Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}`);
+        }
+      }
     }
 
-    createSaleMutation.mutate(saleData)
+    // 2. CALCULATION PHASE
+    let subtotal = 0;
+    const saleItems = [];
+
+    for (const item of items) {
+      const product = await this.prisma.product.findUnique({ where: { id: item.productId } });
+      const total = Number(product.price) * item.quantity;
+      subtotal += total;
+
+      saleItems.push({
+        productId: item.productId,
+        quantity: item.quantity,
+        unitPrice: product.price,
+        total,
+        isRefill: product.type === ProductType.LPG_REFILL,
+      });
+    }
+
+    const finalDiscount = Math.min(discount, subtotal); 
+    const total = subtotal - finalDiscount;
+
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let saleCode = '';
+    do {
+      saleCode = Array.from({ length: 6 }, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
+    } while (await this.prisma.sale.findUnique({ where: { saleCode } }));
+
+    // 3. TRANSACTION & DEDUCTION PHASE
+    const sale = await this.prisma.$transaction(async (tx) => {
+      const newSale = await tx.sale.create({
+        data: {
+          saleCode, branchId, userId: user.userId, customerId, type, status: SaleStatus.COMPLETED,
+          customerName, customerPhone, subtotal, tax: 0, discount: finalDiscount, total, saleDate, notes,
+          items: { create: saleItems },
+        },
+        include: { items: { include: { product: true } }, branch: true, user: { select: { id: true, firstName: true, lastName: true } } },
+      });
+
+      for (const item of items) {
+        const product = await tx.product.findUnique({ where: { id: item.productId } });
+        const inventory = await tx.inventory.findUnique({ where: { branchId_productId: { branchId, productId: item.productId } } });
+
+        const updateData: any = { totalSold: { increment: item.quantity } };
+
+        if (product.type === ProductType.LPG_REFILL) {
+          updateData.fullCylinders = { decrement: item.quantity };
+          updateData.emptyCylinders = { increment: item.quantity };
+        } else if (product.type === ProductType.LPG_CYLINDER) {
+          updateData.fullCylinders = { decrement: item.quantity };
+          updateData.quantity = { decrement: item.quantity };
+        } else {
+          updateData.quantity = { decrement: item.quantity };
+        }
+
+        await tx.inventory.update({
+          where: { branchId_productId: { branchId, productId: item.productId } },
+          data: updateData,
+        });
+
+        await tx.stockMovement.create({
+          data: {
+            inventoryId: inventory.id, productId: item.productId, branchId,
+            quantityBefore: inventory.quantity,
+            quantityChanged: product.type === ProductType.LPG_REFILL ? 0 : -item.quantity,
+            quantityAfter: product.type === ProductType.LPG_REFILL ? inventory.quantity : inventory.quantity - item.quantity,
+            movementType: MovementType.SALE, referenceId: newSale.id, referenceType: 'Sale', performedById: user.userId, notes: `Sale ${saleCode}`,
+          },
+        });
+      }
+      return newSale;
+    });
+
+    // 4. LOGGING PHASE
+    await this.auditLogsService.create({
+      userId: user.userId, action: 'SALE_CREATED', description: `Created ${type} sale ${saleCode} for KES ${total.toFixed(2)}`,
+      entityType: 'Sale', entityId: sale.id, newValues: { type, total, items: saleItems },
+    });
+
+    await this.prisma.activityFeed.create({
+      data: {
+        actorId: user.userId, actorName: `${user.firstName} ${user.lastName}`, branchId: sale.branchId, branchName: sale.branch.name,
+        title: 'Sale Completed', message: `${type} sale ${saleCode} for KES ${total.toFixed(2)}`, entityId: sale.id, entityType: 'Sale',
+        actionUrl: `/sales-history`, visibleToAdmin: true, visibleToBranch: true,
+      },
+    });
+
+    if (type === SaleType.INVOICE) {
+      await this.notificationsService.create({
+        type: 'INVOICE_CREATED', title: 'New Invoice Sale', message: `Invoice sale ${saleCode} created for KES ${total.toFixed(2)}`,
+        userId: user.userId, entityId: sale.id, entityType: 'Sale',
+      });
+    }
+
+    return sale;
   }
 
-  const handleLpgSelect = (type: 'REFILL' | 'EMPTY' | 'BOTH') => {
-    if (!selectedInvItem) return;
-    
-    const p = selectedInvItem.product;
+  async findAll(query: { branchId?: string; startDate?: string; endDate?: string; type?: string; search?: string; user?: any }) {
+    const { branchId, startDate, endDate, type, search, user } = query;
+    const where: any = {};
 
-    if (type === 'REFILL') {
-      if (selectedInvItem.fullCylinders > 0) {
-        addItem({ ...p, id: p.id + '-refill', name: `${p.name} (Refill)` }, 1)
-        toast.success(`Added ${p.name} Refill`)
-      } else {
-        toast.error('No full cylinders in stock!')
-      }
-    } else if (type === 'EMPTY') {
-      if (selectedInvItem.emptyCylinders > 0) {
-        addItem({ ...p, id: p.id + '-empty', name: `${p.name} (Empty Shell)`, price: 3500 }, 1)
-        toast.success(`Added ${p.name} Empty Shell`)
-      } else {
-        toast.error('No empty shells in stock!')
-      }
-    } else if (type === 'BOTH') {
-      if (selectedInvItem.fullCylinders > 0) {
-        addItem({ ...p, id: p.id + '-complete', name: `${p.name} (Complete Set)`, price: Number(p.price) + 3500 }, 1)
-        toast.success(`Added ${p.name} Complete Set`)
-      } else {
-         toast.error('No full cylinders in stock to make a complete set!')
-      }
+    if (branchId) {
+      if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) throw new ForbiddenException('You can only view your branch sales');
+      where.branchId = branchId;
+    } else if (user.role === UserRole.BRANCH_MANAGER) {
+      where.branchId = user.branchId;
     }
-    
-    setLpgModalOpen(false)
-    setSearch('')
+
+    if (startDate && endDate) where.createdAt = { gte: new Date(startDate), lte: new Date(endDate) };
+    if (type) where.type = type;
+    if (search) where.saleCode = { contains: search, mode: 'insensitive' };
+
+    return this.prisma.sale.findMany({
+      where,
+      include: { items: { include: { product: true } }, branch: { select: { id: true, name: true, code: true } }, user: { select: { id: true, firstName: true, lastName: true } }, customer: { select: { id: true, fullName: true, phone: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
-  return (
-    <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-bold">New Sale</h1>
-        <p className="text-muted-foreground">Search to start a transaction</p>
-      </div>
+  async findOne(id: string, user?: any) {
+    const sale = await this.prisma.sale.findUnique({
+      where: { id },
+      include: { items: { include: { product: true } }, branch: true, user: { select: { id: true, firstName: true, lastName: true } }, customer: true, returns: true },
+    });
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Search & Products Section */}
-        <div className="lg:col-span-2 space-y-4">
-          <div className="relative">
-            <Search className="absolute left-4 top-4 h-5 w-5 text-muted-foreground" />
-            <Input
-              placeholder="Start typing product name or code..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="pl-12 h-14 text-lg bg-white shadow-sm border-primary/20 focus-visible:ring-primary"
-              autoFocus
-            />
-          </div>
+    if (!sale) throw new NotFoundException('Sale not found');
+    if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) throw new ForbiddenException('You can only view your branch sales');
+    return sale;
+  }
 
-          {search.trim() === '' ? (
-            <div className="flex flex-col items-center justify-center py-20 px-4 text-center border-2 border-dashed rounded-xl bg-muted/10">
-              <div className="bg-primary/10 p-4 rounded-full mb-4">
-                <Search className="w-8 h-8 text-primary" />
-              </div>
-              <h3 className="text-lg font-semibold">Ready for next customer</h3>
-              <p className="text-muted-foreground max-w-sm mt-2">
-                Type a product name, code, or scan a barcode in the search bar above to begin.
-              </p>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {filteredInventory?.map((inv: any) => {
-                const product = inv.product;
-                const isLpg = product.type === 'LPG_REFILL' || product.type === 'LPG_CYLINDER';
-                const availableStock = isLpg ? (inv.fullCylinders || 0) : inv.quantity;
-                const isOutOfStock = availableStock === 0;
+  async findByCode(saleCode: string, user?: any) {
+    const sale = await this.prisma.sale.findUnique({
+      where: { saleCode },
+      include: { items: { include: { product: true } }, branch: true, user: { select: { id: true, firstName: true, lastName: true } }, returns: true },
+    });
 
-                return (
-                  <Card
-                    key={product.id}
-                    className={`cursor-pointer transition-all hover:border-primary hover:shadow-md ${isOutOfStock ? 'opacity-50 grayscale' : ''}`}
-                    onClick={() => {
-                      if (isLpg) {
-                        setSelectedInvItem(inv)
-                        setLpgModalOpen(true)
-                      } else {
-                        if (!isOutOfStock) {
-                          addItem(product, 1)
-                          setSearch('')
-                        } else {
-                          toast.error('Out of stock!')
-                        }
-                      }
-                    }}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex items-start justify-between mb-2">
-                        <Badge variant="secondary" className="text-xs">{isLpg ? 'LPG' : 'STANDARD'}</Badge>
-                        <span className={`text-xs font-bold ${isOutOfStock ? 'text-destructive' : availableStock <= 5 ? 'text-amber-500' : 'text-emerald-600'}`}>
-                          {isOutOfStock ? 'Out of Stock' : `${availableStock} left`}
-                        </span>
-                      </div>
-                      <h4 className="font-medium text-sm mb-1 line-clamp-2 min-h-[40px]">{product.name}</h4>
-                      <p className="text-lg font-bold text-primary">{formatCurrency(product.price)}</p>
-                    </CardContent>
-                  </Card>
-                )
-              })}
+    if (!sale) throw new NotFoundException('Sale not found');
+    if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) throw new ForbiddenException('You can only view your branch sales');
+    return sale;
+  }
 
-              {filteredInventory?.length === 0 && (
-                <div className="col-span-full text-center py-12 text-muted-foreground border rounded-lg bg-muted/20">
-                  <Package className="w-12 h-12 mx-auto mb-4 opacity-30" />
-                  <p>No products found matching &quot;{search}&quot;</p>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+  async getWeeklySales(year?: number, week?: number, user?: any) {
+    const now = new Date();
+    const targetYear = year || now.getFullYear();
+    const targetWeek = week || this.getWeekNumber(now);
 
-        {/* Cart Section */}
-        <div className="space-y-4">
-          <Card className="sticky top-24">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-lg flex items-center gap-2">
-                <ShoppingCart className="w-5 h-5" />
-                Cart ({items.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex gap-2">
-                <Button variant={saleType === SaleType.CASH ? 'default' : 'outline'} className="flex-1" size="sm" onClick={() => setSaleType(SaleType.CASH)}>Cash</Button>
-                <Button variant={saleType === SaleType.INVOICE ? 'default' : 'outline'} className="flex-1" size="sm" onClick={() => setSaleType(SaleType.INVOICE)}>Invoice</Button>
-              </div>
+    const weekStart = this.getWeekStartDate(targetYear, targetWeek);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    weekEnd.setHours(23, 59, 59, 999);
 
-              <div className="space-y-2 max-h-[300px] overflow-y-auto pr-2">
-                {items.length === 0 ? (
-                  <p className="text-center text-muted-foreground py-8">Cart is empty</p>
-                ) : (
-                  items.map((item) => (
-                    <div key={item.productId} className="flex items-center gap-2 p-2 bg-muted/50 border rounded-lg">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{item.product.name}</p>
-                        <p className="text-xs text-primary font-semibold">{formatCurrency(item.unitPrice)}</p>
-                      </div>
-                      <div className="flex items-center gap-1 bg-background rounded-md border p-0.5">
-                        <Button variant="ghost" size="icon" className="h-6 w-6 rounded-sm" onClick={() => updateQuantity(item.productId, item.quantity - 1)}>
-                          <Minus className="w-3 h-3" />
-                        </Button>
-                        <span className="w-6 text-center text-sm font-medium">{item.quantity}</span>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          className="h-6 w-6 rounded-sm" 
-                          onClick={() => updateQuantity(item.productId, item.quantity + 1)}
-                        >
-                          <Plus className="w-3 h-3" />
-                        </Button>
-                      </div>
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10 ml-1" onClick={() => removeItem(item.productId)}>
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  ))
-                )}
-              </div>
+    const where: any = { createdAt: { gte: weekStart, lte: weekEnd }, status: SaleStatus.COMPLETED };
+    if (user?.role === UserRole.BRANCH_MANAGER) where.branchId = user.branchId;
 
-              <Separator />
+    const sales = await this.prisma.sale.findMany({
+      where,
+      include: { items: { include: { product: true } }, branch: { select: { name: true } }, user: { select: { firstName: true, lastName: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
 
-              <div className="space-y-2">
-                <Input placeholder="Customer name (optional)" value={customerName} onChange={e => setCustomerInfo(e.target.value, customerPhone)} />
-                <Input placeholder="Customer phone (optional)" value={customerPhone} onChange={e => setCustomerInfo(customerName, e.target.value)} />
-              </div>
+    const groupedByDate = {};
+    sales.forEach((sale) => {
+      const date = sale.createdAt.toISOString().split('T')[0];
+      if (!groupedByDate[date]) groupedByDate[date] = [];
+      groupedByDate[date].push(sale);
+    });
 
-              <div className="flex items-center gap-2">
-                <Tag className="w-4 h-4 text-muted-foreground" />
-                <Input type="number" placeholder="Discount (KES)" value={discount || ''} onChange={e => setDiscount(Number(e.target.value))} className="flex-1" />
-              </div>
+    return { weekStart: weekStart.toISOString().split('T')[0], weekEnd: weekEnd.toISOString().split('T')[0], weekNumber: targetWeek, year: targetYear, totalSales: sales.length, totalAmount: sales.reduce((sum, s) => sum + Number(s.total), 0), groupedByDate, sales };
+  }
 
-              <Separator />
+  private getWeekNumber(date: Date): number {
+    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const dayNum = d.getUTCDay() || 7;
+    d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+    return Math.ceil((((d.getTime() - yearStart.getTime()) / 86400000) + 1) / 7);
+  }
 
-              <div className="space-y-1 text-sm bg-muted/30 p-3 rounded-lg">
-                <div className="flex justify-between text-muted-foreground">
-                  <span>Subtotal</span>
-                  <span>{formatCurrency(getSubtotal())}</span>
-                </div>
-                {discount > 0 && (
-                  <div className="flex justify-between text-destructive font-medium">
-                    <span>Discount</span>
-                    <span>-{formatCurrency(discount)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-lg font-black text-primary pt-2 mt-1 border-t">
-                  <span>Total</span>
-                  <span>{formatCurrency(getTotal())}</span>
-                </div>
-              </div>
-            </CardContent>
-            <CardFooter>
-              <Button className="w-full text-md h-12 shadow-sm" disabled={items.length === 0 || createSaleMutation.isPending} onClick={handleCheckout}>
-                {createSaleMutation.isPending ? 'Processing...' : 'Complete Sale'}
-              </Button>
-            </CardFooter>
-          </Card>
-        </div>
-      </div>
-
-      {/* The LPG Selection Modal */}
-      <Dialog open={lpgModalOpen} onOpenChange={setLpgModalOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Select Sale Type: {selectedInvItem?.product?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="grid gap-3 py-4">
-            
-            <Button 
-              variant="outline" 
-              className={`h-16 justify-start text-left px-4 ${selectedInvItem?.fullCylinders === 0 ? 'opacity-50' : 'hover:border-blue-400'}`} 
-              onClick={() => handleLpgSelect('REFILL')}
-            >
-              <Flame className="w-5 h-5 mr-3 text-blue-500" />
-              <div className="flex-1">
-                <div className="flex justify-between w-full">
-                  <p className="font-bold">Gas Refill Only</p>
-                  <span className="text-xs font-medium text-blue-600">{selectedInvItem?.fullCylinders} left</span>
-                </div>
-                <p className="text-xs text-muted-foreground">Customer returns empty shell ({formatCurrency(selectedInvItem?.product?.price)})</p>
-              </div>
-            </Button>
-            
-            <Button 
-              variant="outline" 
-              className={`h-16 justify-start text-left px-4 ${selectedInvItem?.emptyCylinders === 0 ? 'opacity-50' : 'hover:border-amber-400'}`} 
-              onClick={() => handleLpgSelect('EMPTY')}
-            >
-              <Package className="w-5 h-5 mr-3 text-amber-600" />
-              <div className="flex-1">
-                <div className="flex justify-between w-full">
-                  <p className="font-bold">Empty Cylinder</p>
-                  <span className="text-xs font-medium text-amber-600">{selectedInvItem?.emptyCylinders} left</span>
-                </div>
-                <p className="text-xs text-muted-foreground">Selling shell asset (KES 3,500)</p>
-              </div>
-            </Button>
-            
-            <Button 
-              className={`h-16 justify-start text-left px-4 ${selectedInvItem?.fullCylinders === 0 ? 'opacity-50' : ''}`}
-              onClick={() => handleLpgSelect('BOTH')}
-            >
-              <Flame className="w-5 h-5 mr-3" />
-              <div className="flex-1">
-                <p className="font-bold">Complete Set (Gas + Shell)</p>
-                <p className="text-xs opacity-90">Customer takes new cylinder (KES {Number(selectedInvItem?.product?.price) + 3500})</p>
-              </div>
-            </Button>
-
-          </div>
-        </DialogContent>
-      </Dialog>
-    </div>
-  )
+  private getWeekStartDate(year: number, week: number): Date {
+    const januaryFourth = new Date(year, 0, 4);
+    const januaryFourthDay = januaryFourth.getDay() || 7;
+    const firstMonday = new Date(januaryFourth);
+    firstMonday.setDate(januaryFourth.getDate() - januaryFourthDay + 1);
+    return new Date(firstMonday.getTime() + (week - 1) * 7 * 86400000);
+  }
 }
-
-export default NewSale
