@@ -1,65 +1,62 @@
-import { IsNotEmpty, IsString, IsOptional, IsEnum, IsNumber, IsArray, ValidateNested, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsEnum } from 'class-validator';
+import { ProductType } from '@prisma/client';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { SaleType, LpgSaleVariant } from '@prisma/client';
 
-class SaleItemDto {
+export class CreateProductDto {
   @ApiProperty()
-  @IsNotEmpty()
   @IsString()
-  productId: string;
+  @IsNotEmpty()
+  name: string;
 
   @ApiProperty()
+  @IsString()
   @IsNotEmpty()
+  code: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  description?: string;
+
+  @ApiProperty({ enum: ProductType })
+  @IsEnum(ProductType)
+  type: ProductType;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  categoryId?: string;
+
+  @ApiProperty()
   @IsNumber()
-  @Min(1, { message: 'Quantity must be at least 1' })
-  quantity: number;
-
-  @ApiProperty({ enum: LpgSaleVariant, required: false })
-  @IsOptional()
-  @IsEnum(LpgSaleVariant, { message: 'lpgVariant must be REFILL, EMPTY_SHELL, or COMPLETE_SET' })
-  lpgVariant?: LpgSaleVariant;
-}
-
-export class CreateSaleDto {
-  @ApiProperty()
-  @IsNotEmpty({ message: 'Branch ID is required' })
-  @IsString()
-  branchId: string;
-
-  @ApiProperty({ enum: SaleType })
-  @IsEnum(SaleType, { message: 'Sale type must be CASH or INVOICE' })
-  @IsNotEmpty()
-  type: SaleType;
+  @Type(() => Number)
+  price: number;
 
   @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  customerId?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  customerName?: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  customerPhone?: string;
-
-  @ApiProperty({ type: [SaleItemDto] })
-  @IsArray({ message: 'Items array is required' })
-  @ValidateNested({ each: true })
-  @Type(() => SaleItemDto)
-  items: SaleItemDto[];
-
-  @ApiProperty({ required: false, default: 0 })
   @IsOptional()
   @IsNumber()
-  discount?: number;
+  @Type(() => Number)
+  emptyPrice?: number;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  notes?: string;
+  cylinderSize?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsString()
+  brand?: string;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  isCylinderTracked?: boolean;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  minStockLevel?: number;
 }
