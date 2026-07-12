@@ -1,55 +1,62 @@
-import { IsNotEmpty, IsString, IsOptional, IsEnum, IsNumber, IsBoolean } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsEnum } from 'class-validator';
 import { ProductType } from '@prisma/client';
+import { Type } from 'class-transformer';
+import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateProductDto {
-  @ApiProperty({ example: 'LPG Refill 6kg' })
-  @IsNotEmpty({ message: 'Product name is required' })
+  @ApiProperty()
   @IsString()
+  @IsNotEmpty()
   name: string;
 
-  @ApiProperty({ example: 'LPG-6KG' })
-  @IsNotEmpty({ message: 'Product code is required' })
+  @ApiProperty()
   @IsString()
+  @IsNotEmpty()
   code: string;
 
-  @ApiProperty({ example: '6kg LPG gas refill', required: false })
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   description?: string;
 
-  @ApiProperty({ enum: ProductType, example: 'LPG_REFILL' })
-  @IsEnum(ProductType, { message: 'Type must be LPG_REFILL, LPG_CYLINDER, ELECTRONICS, or ACCESSORIES' })
-  @IsNotEmpty({ message: 'Product type is required' })
+  @ApiProperty({ enum: ProductType })
+  @IsEnum(ProductType)
   type: ProductType;
 
-  @ApiProperty({ example: 'category-id', required: false })
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   categoryId?: string;
 
-  @ApiProperty({ example: 1200.00 })
-  @IsNotEmpty({ message: 'Price is required' })
+  @ApiProperty()
   @IsNumber()
+  @Type(() => Number)
   price: number;
 
-  @ApiProperty({ example: 1000.00, required: false })
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsNumber()
-  costPrice?: number;
+  @Type(() => Number)
+  emptyPrice?: number;
 
-  @ApiProperty({ example: '6kg', required: false })
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   cylinderSize?: string;
 
-  @ApiProperty({ example: 'Total', required: false })
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   brand?: string;
 
-  @ApiProperty({ example: 10, required: false })
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsBoolean()
+  isCylinderTracked?: boolean;
+
+  @ApiProperty({ required: false })
   @IsOptional()
   @IsNumber()
+  @Type(() => Number)
   minStockLevel?: number;
 }
