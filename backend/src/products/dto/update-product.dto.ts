@@ -36,6 +36,11 @@ export class UpdateProductDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsNumber()
+  emptyPrice?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
   costPrice?: number;
 
   @ApiProperty({ required: false })
