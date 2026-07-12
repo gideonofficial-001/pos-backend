@@ -88,27 +88,46 @@ async function main() {
   const brands = ['K-Gas', 'Supa Gas', 'Afri Gas', 'Hashi', 'Sea Gas', 'Total', 'Jamii', 'Pro Gas', 'Top Gas'];
   const products = [];
 
-  // Seed 6Kg Products (Price: 1400)
+  // Seed 6Kg Products (Refill: 1400, Empty: 3000)
   for (const brand of brands) {
     const code = `6KG-${brand.toUpperCase().replace(/\s+/g, '')}`;
     const product = await prisma.product.upsert({
       where: { code },
       update: {},
-      create: { name: `${brand} 6Kg`, code, type: ProductType.LPG_REFILL, categoryId: categories['6Kg LPG'], price: 1400, isCylinderTracked: true, minStockLevel: 10 },
+      create: { 
+        name: `${brand} 6Kg`, 
+        code, 
+        type: ProductType.LPG_REFILL, 
+        categoryId: categories['6Kg LPG'], 
+        price: 1400, 
+        emptyPrice: 3000,
+        isCylinderTracked: true, 
+        minStockLevel: 10 
+      },
     });
     products.push(product);
   }
 
-  // Seed 13Kg Products (Price: 3000)
+  // Seed 13Kg Products (Refill: 3000, Empty: 5000)
   for (const brand of brands) {
     const code = `13KG-${brand.toUpperCase().replace(/\s+/g, '')}`;
     const product = await prisma.product.upsert({
       where: { code },
       update: {},
-      create: { name: `${brand} 13Kg`, code, type: ProductType.LPG_REFILL, categoryId: categories['13Kg LPG'], price: 3000, isCylinderTracked: true, minStockLevel: 10 },
+      create: { 
+        name: `${brand} 13Kg`, 
+        code, 
+        type: ProductType.LPG_REFILL, 
+        categoryId: categories['13Kg LPG'], 
+        price: 3000, 
+        emptyPrice: 5000,
+        isCylinderTracked: true, 
+        minStockLevel: 10 
+      },
     });
     products.push(product);
   }
+  
   console.log(`Created ${products.length} LPG products`);
 
   // 5. Initialize Inventory for all branches
