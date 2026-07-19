@@ -1,16 +1,17 @@
-import { IsNotEmpty, IsString, IsOptional, IsArray, ValidateNested, IsNumber } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, IsArray, ValidateNested, IsNumber, IsPositive, ArrayMinSize } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
 class TransferItemDto {
   @ApiProperty()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Product ID is required for every transfer item' })
   @IsString()
   productId: string;
 
   @ApiProperty()
   @IsNotEmpty()
-  @IsNumber()
+  @IsNumber({}, { message: 'Quantity must be a number' })
+  @IsPositive({ message: 'Quantity must be greater than 0' })
   quantity: number;
 }
 
@@ -27,6 +28,7 @@ export class CreateTransferDto {
 
   @ApiProperty({ type: [TransferItemDto] })
   @IsArray()
+  @ArrayMinSize(1, { message: 'At least one product must be included in the transfer' })
   @ValidateNested({ each: true })
   @Type(() => TransferItemDto)
   items: TransferItemDto[];
@@ -35,4 +37,4 @@ export class CreateTransferDto {
   @IsOptional()
   @IsString()
   notes?: string;
-}
+  }
