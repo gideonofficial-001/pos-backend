@@ -1,7 +1,16 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { CreateTransferDto } from './dto/create-transfer.dto';
 import { TransferStatus, MovementType, UserRole } from '@prisma/client';
+
+interface AuthUser {
+  userId: string;
+  role: UserRole;
+  branchId?: string;
+  firstName?: string;
+  lastName?: string;
+}
 
 @Injectable()
 export class TransfersService {
@@ -10,8 +19,12 @@ export class TransfersService {
     private notificationsService: NotificationsService,
   ) {}
 
-  async create(data: { fromBranchId: string; toBranchId: string; items: any[]; notes?: string }, user: any) {
+  async create(data: CreateTransferDto, user: AuthUser) {
     const { fromBranchId, toBranchId, items, notes } = data;
+
+    if (!items || items.length === 0) {
+      throw new BadRequestException('At least one product must be included in the transfer');
+    }
 
     if (fromBranchId === toBranchId) {
       throw new BadRequestException('Source and destination branches cannot be the same');
@@ -22,7 +35,27 @@ export class TransfersService {
       throw new ForbiddenException('You can only transfer from your assigned branch');
     }
 
+    const [sourceBranch, destBranch] = await Promise.all([
+      this.prisma.branch.findUnique({ where: { id: fromBranchId } }),
+      this.prisma.branch.findUnique({ where: { id: toBranchId } }),
+    ]);
+
+    if (!sourceBranch) {
+      throw new NotFoundException('Source branch not found');
+    }
+    if (!destBranch) {
+      throw new NotFoundException('Destination branch not found');
+    }
+    if (!destBranch.isActive) {
+      throw new BadRequestException(`${destBranch.name} is inactive and cannot receive transfers`);
+    }
+
     // Validate stock availability
+    for (const item of items) {
+      if (!item.quantity || item.quantity <= 0) {
+        throw new BadRequestException('Quantity must be greater than 0 for every item');
+      }
+    }
     for (const item of items) {
       const inventory = await this.prisma.inventory.findUnique({
         where: { branchId_productId: { branchId: fromBranchId, productId: item.productId } },
@@ -148,7 +181,7 @@ export class TransfersService {
     return transfer;
   }
 
-  async approve(id: string, approvedById: string) {
+  async approve(id: string, user: AuthUser) {
     const transfer = await this.prisma.transfer.findUnique({
       where: { id },
       include: { items: true },
@@ -159,8 +192,14 @@ export class TransfersService {
     }
 
     if (transfer.status !== TransferStatus.PENDING) {
-      throw new BadRequestException('Transfer is not pending');
+      throw new BadRequestException(`Transfer has already been ${transfer.status.toLowerCase()}`);
     }
+
+    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== transfer.toBranchId) {
+      throw new ForbiddenException('Only the receiving branch manager can approve this transfer');
+    }
+
+    const approvedById = user.userId;
 
     // Process transfer in transaction
     await this.prisma.$transaction(async (tx) => {
@@ -255,22 +294,30 @@ export class TransfersService {
     return this.findOne(id);
   }
 
-  async reject(id: string, approvedById: string, rejectionReason: string) {
+  async reject(id: string, user: AuthUser, rejectionReason: string) {
+    if (!rejectionReason || !rejectionReason.trim()) {
+      throw new BadRequestException('A rejection reason is required');
+    }
+
     const transfer = await this.prisma.transfer.findUnique({ where: { id } });
     if (!transfer) {
       throw new NotFoundException('Transfer not found');
     }
 
     if (transfer.status !== TransferStatus.PENDING) {
-      throw new BadRequestException('Transfer is not pending');
+      throw new BadRequestException(`Transfer has already been ${transfer.status.toLowerCase()}`);
+    }
+
+    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== transfer.toBranchId) {
+      throw new ForbiddenException('Only the receiving branch manager can reject this transfer');
     }
 
     await this.prisma.transfer.update({
       where: { id },
       data: {
         status: TransferStatus.REJECTED,
-        approvedById,
-        rejectionReason,
+        approvedById: user.userId,
+        rejectionReason: rejectionReason.trim(),
       },
     });
 
@@ -283,6 +330,46 @@ export class TransfersService {
       entityId: id,
       entityType: 'Transfer',
     });
+
+    return this.findOne(id);
+  }
+
+  async cancel(id: string, user: AuthUser) {
+    const transfer = await this.prisma.transfer.findUnique({
+      where: { id },
+      include: { toBranch: { select: { managerId: true } } },
+    });
+    if (!transfer) {
+      throw new NotFoundException('Transfer not found');
+    }
+
+    if (transfer.status !== TransferStatus.PENDING) {
+      throw new BadRequestException(
+        `Transfer has already been ${transfer.status.toLowerCase()} and can no longer be cancelled`,
+      );
+    }
+
+    // Only the branch manager who initiated the request (or an admin) may withdraw it
+    if (user.role === UserRole.BRANCH_MANAGER && transfer.initiatedBy !== user.userId) {
+      throw new ForbiddenException('Only the branch manager who created this transfer can cancel it');
+    }
+
+    await this.prisma.transfer.update({
+      where: { id },
+      data: { status: TransferStatus.CANCELLED },
+    });
+
+    // Notify the destination branch's manager that the request was withdrawn
+    if (transfer.toBranch?.managerId) {
+      await this.notificationsService.create({
+        type: 'TRANSFER_CANCELLED',
+        title: 'Transfer Cancelled',
+        message: `Transfer ${transfer.transferCode} to your branch was cancelled by the sender`,
+        userId: transfer.toBranch.managerId,
+        entityId: id,
+        entityType: 'Transfer',
+      });
+    }
 
     return this.findOne(id);
   }
