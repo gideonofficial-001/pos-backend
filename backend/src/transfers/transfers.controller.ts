@@ -42,14 +42,14 @@ export class TransfersController {
   }
 
   @Patch(':id/approve')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
+  @Roles(UserRole.BRANCH_MANAGER)
   @ApiOperation({ summary: 'Approve transfer' })
   async approve(@Param('id') id: string, @GetUser() user: any) {
     return this.transfersService.approve(id, user);
   }
 
   @Patch(':id/reject')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
+  @Roles(UserRole.BRANCH_MANAGER)
   @ApiOperation({ summary: 'Reject transfer' })
   async reject(
     @Param('id') id: string,
