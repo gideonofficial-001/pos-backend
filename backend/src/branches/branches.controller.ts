@@ -24,7 +24,7 @@ export class BranchesController {
   }
 
   @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
+  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
   @ApiOperation({ summary: 'Get all branches' })
   async findAll() {
     return this.branchesService.findAll();
