@@ -12,6 +12,10 @@ interface AuthUser {
   lastName?: string;
 }
 
+function buildItemsSummary(items: { quantity: number; product: { name: string } }[]): string {
+  return items.map((i) => `${i.product.name} x${i.quantity}`).join(', ');
+}
+
 @Injectable()
 export class TransfersService {
   constructor(
@@ -108,15 +112,18 @@ export class TransfersService {
       },
     });
 
-    // Notify destination branch
-    await this.notificationsService.create({
-      type: 'TRANSFER_REQUEST',
-      title: 'New Transfer Request',
-      message: `Transfer ${transferCode} from ${transfer.fromBranch.name} to ${transfer.toBranch.name}`,
-      userId: user.userId,
-      entityId: transfer.id,
-      entityType: 'Transfer',
-    });
+    // Notify the destination branch's manager with the actual products requested
+    const itemsSummary = buildItemsSummary(transfer.items);
+    if (destBranch.managerId) {
+      await this.notificationsService.create({
+        type: 'TRANSFER_REQUEST',
+        title: 'New Transfer Request',
+        message: `${transfer.fromBranch.name} wants to send you: ${itemsSummary} (${transferCode})`,
+        userId: destBranch.managerId,
+        entityId: transfer.id,
+        entityType: 'Transfer',
+      });
+    }
 
     // Create activity feed
     await this.prisma.activityFeed.create({
@@ -184,7 +191,7 @@ export class TransfersService {
   async approve(id: string, user: AuthUser) {
     const transfer = await this.prisma.transfer.findUnique({
       where: { id },
-      include: { items: true },
+      include: { items: { include: { product: true } } },
     });
 
     if (!transfer) {
@@ -195,7 +202,9 @@ export class TransfersService {
       throw new BadRequestException(`Transfer has already been ${transfer.status.toLowerCase()}`);
     }
 
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== transfer.toBranchId) {
+    // Route is already restricted to BRANCH_MANAGER; enforce it's specifically
+    // the receiving branch's manager (not just any branch manager).
+    if (user.branchId !== transfer.toBranchId) {
       throw new ForbiddenException('Only the receiving branch manager can approve this transfer');
     }
 
@@ -285,7 +294,7 @@ export class TransfersService {
     await this.notificationsService.create({
       type: 'TRANSFER_APPROVED',
       title: 'Transfer Approved',
-      message: `Your transfer ${transfer.transferCode} has been approved`,
+      message: `Your transfer ${transfer.transferCode} (${buildItemsSummary(transfer.items)}) has been approved`,
       userId: transfer.initiatedBy,
       entityId: id,
       entityType: 'Transfer',
@@ -299,7 +308,10 @@ export class TransfersService {
       throw new BadRequestException('A rejection reason is required');
     }
 
-    const transfer = await this.prisma.transfer.findUnique({ where: { id } });
+    const transfer = await this.prisma.transfer.findUnique({
+      where: { id },
+      include: { items: { include: { product: true } } },
+    });
     if (!transfer) {
       throw new NotFoundException('Transfer not found');
     }
@@ -308,7 +320,7 @@ export class TransfersService {
       throw new BadRequestException(`Transfer has already been ${transfer.status.toLowerCase()}`);
     }
 
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== transfer.toBranchId) {
+    if (user.branchId !== transfer.toBranchId) {
       throw new ForbiddenException('Only the receiving branch manager can reject this transfer');
     }
 
@@ -325,7 +337,7 @@ export class TransfersService {
     await this.notificationsService.create({
       type: 'TRANSFER_REJECTED',
       title: 'Transfer Rejected',
-      message: `Your transfer ${transfer.transferCode} has been rejected. Reason: ${rejectionReason}`,
+      message: `Your transfer ${transfer.transferCode} (${buildItemsSummary(transfer.items)}) was rejected. Reason: ${rejectionReason}`,
       userId: transfer.initiatedBy,
       entityId: id,
       entityType: 'Transfer',
@@ -337,7 +349,10 @@ export class TransfersService {
   async cancel(id: string, user: AuthUser) {
     const transfer = await this.prisma.transfer.findUnique({
       where: { id },
-      include: { toBranch: { select: { managerId: true } } },
+      include: {
+        toBranch: { select: { managerId: true } },
+        items: { include: { product: true } },
+      },
     });
     if (!transfer) {
       throw new NotFoundException('Transfer not found');
@@ -364,7 +379,7 @@ export class TransfersService {
       await this.notificationsService.create({
         type: 'TRANSFER_CANCELLED',
         title: 'Transfer Cancelled',
-        message: `Transfer ${transfer.transferCode} to your branch was cancelled by the sender`,
+        message: `Transfer ${transfer.transferCode} (${buildItemsSummary(transfer.items)}) to your branch was cancelled by the sender`,
         userId: transfer.toBranch.managerId,
         entityId: id,
         entityType: 'Transfer',
