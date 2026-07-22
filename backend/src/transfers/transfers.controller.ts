@@ -43,20 +43,39 @@ export class TransfersController {
 
   @Patch(':id/approve')
   @Roles(UserRole.BRANCH_MANAGER)
-  @ApiOperation({ summary: 'Approve transfer' })
+  @ApiOperation({ summary: 'Approve all remaining pending items on a transfer' })
   async approve(@Param('id') id: string, @GetUser() user: any) {
     return this.transfersService.approve(id, user);
   }
 
   @Patch(':id/reject')
   @Roles(UserRole.BRANCH_MANAGER)
-  @ApiOperation({ summary: 'Reject transfer' })
+  @ApiOperation({ summary: 'Reject all remaining pending items on a transfer' })
   async reject(
     @Param('id') id: string,
     @Body('rejectionReason') rejectionReason: string,
     @GetUser() user: any,
   ) {
     return this.transfersService.reject(id, user, rejectionReason);
+  }
+
+  @Patch(':id/items/:itemId/approve')
+  @Roles(UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Approve a single item on a transfer' })
+  async approveItem(@Param('id') id: string, @Param('itemId') itemId: string, @GetUser() user: any) {
+    return this.transfersService.approveItem(id, itemId, user);
+  }
+
+  @Patch(':id/items/:itemId/reject')
+  @Roles(UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Reject a single item on a transfer' })
+  async rejectItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body('rejectionReason') rejectionReason: string,
+    @GetUser() user: any,
+  ) {
+    return this.transfersService.rejectItem(id, itemId, user, rejectionReason);
   }
 
   @Patch(':id/cancel')
