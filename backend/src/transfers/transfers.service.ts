@@ -2,7 +2,7 @@ import { Injectable, NotFoundException, BadRequestException, ForbiddenException 
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateTransferDto } from './dto/create-transfer.dto';
-import { TransferStatus, MovementType, UserRole } from '@prisma/client';
+import { TransferStatus, TransferItemStatus, TransferItemVariant, MovementType, UserRole } from '@prisma/client';
 
 interface AuthUser {
   userId: string;
@@ -12,8 +12,13 @@ interface AuthUser {
   lastName?: string;
 }
 
-function buildItemsSummary(items: { quantity: number; product: { name: string } }[]): string {
-  return items.map((i) => `${i.product.name} x${i.quantity}`).join(', ');
+function itemLabel(item: { quantity: number; variant: string; product: { name: string } }): string {
+  const suffix = item.variant === 'REFILL' ? ' (Refill)' : item.variant === 'EMPTY_SHELL' ? ' (Empty Shell)' : '';
+  return `${item.product.name}${suffix} x${item.quantity}`;
+}
+
+function buildItemsSummary(items: { quantity: number; variant: string; product: { name: string } }[]): string {
+  return items.map(itemLabel).join(', ');
 }
 
 @Injectable()
@@ -54,45 +59,72 @@ export class TransfersService {
       throw new BadRequestException(`${destBranch.name} is inactive and cannot receive transfers`);
     }
 
-    // Validate stock availability
     for (const item of items) {
       if (!item.quantity || item.quantity <= 0) {
         throw new BadRequestException('Quantity must be greater than 0 for every item');
       }
     }
+
+    // Validate stock availability per item, variant-aware, and build the
+    // records to create.
+    const transferItems: { productId: string; inventoryId: string; quantity: number; variant: TransferItemVariant }[] = [];
     for (const item of items) {
+      const variant: TransferItemVariant = (item.variant ?? 'STANDARD') as TransferItemVariant;
+
       const inventory = await this.prisma.inventory.findUnique({
         where: { branchId_productId: { branchId: fromBranchId, productId: item.productId } },
         include: { product: true },
       });
 
       if (!inventory) {
-        throw new BadRequestException(`Product not found in source branch`);
+        throw new BadRequestException('Product not found in source branch');
       }
 
-      if (inventory.quantity < item.quantity) {
-        throw new BadRequestException(
-          `Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}, Requested: ${item.quantity}`,
-        );
+      // Cylinder-tracked LPG products must specify which stock is moving
+      // (full cylinders vs empty shells) instead of one merged quantity.
+      if (inventory.product.isCylinderTracked) {
+        if (variant === TransferItemVariant.STANDARD) {
+          throw new BadRequestException(
+            `${inventory.product.name} tracks cylinders — specify whether you're sending Refill (full) or Empty Shell cylinders`,
+          );
+        }
+      } else if (variant !== TransferItemVariant.STANDARD) {
+        throw new BadRequestException(`${inventory.product.name} does not support Refill/Empty Shell transfers`);
       }
+
+      if (variant === TransferItemVariant.REFILL) {
+        const availableFull = inventory.fullCylinders ?? 0;
+        if (availableFull < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient full cylinders for ${inventory.product.name}. Available: ${availableFull}, Requested: ${item.quantity}`,
+          );
+        }
+      } else if (variant === TransferItemVariant.EMPTY_SHELL) {
+        const availableEmpty = inventory.quantity - (inventory.fullCylinders ?? 0);
+        if (availableEmpty < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient empty cylinders for ${inventory.product.name}. Available: ${availableEmpty}, Requested: ${item.quantity}`,
+          );
+        }
+      } else {
+        if (inventory.quantity < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}, Requested: ${item.quantity}`,
+          );
+        }
+      }
+
+      transferItems.push({
+        productId: item.productId,
+        inventoryId: inventory.id,
+        quantity: item.quantity,
+        variant,
+      });
     }
 
     // Generate transfer code
     const count = await this.prisma.transfer.count();
     const transferCode = `TRF-${String(count + 1).padStart(5, '0')}`;
-
-    // Create transfer items with inventory lookup
-    const transferItems = [];
-    for (const item of items) {
-      const inventory = await this.prisma.inventory.findUnique({
-        where: { branchId_productId: { branchId: fromBranchId, productId: item.productId } },
-      });
-      transferItems.push({
-        productId: item.productId,
-        inventoryId: inventory.id,
-        quantity: item.quantity,
-      });
-    }
 
     const transfer = await this.prisma.transfer.create({
       data: {
@@ -188,113 +220,239 @@ export class TransfersService {
     return transfer;
   }
 
+  // Moves stock for a single transfer item, variant-aware. Must run inside
+  // a transaction. REFILL moves full (gas-filled) cylinders and adjusts
+  // fullCylinders at both branches; EMPTY_SHELL moves only empty shells
+  // (quantity only); STANDARD is the original behaviour for non-cylinder
+  // products.
+  private async applyItemStockMovement(tx: any, transfer: any, item: any, performedById: string) {
+    const variantSuffix =
+      item.variant === 'REFILL' ? ' (refill)' : item.variant === 'EMPTY_SHELL' ? ' (empty shell)' : '';
+
+    const sourceInventory = await tx.inventory.findUnique({
+      where: { branchId_productId: { branchId: transfer.fromBranchId, productId: item.productId } },
+    });
+
+    if (sourceInventory) {
+      if (item.variant === 'REFILL') {
+        const availableFull = sourceInventory.fullCylinders ?? 0;
+        if (availableFull < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient full cylinders remaining at the source branch to approve this item`,
+          );
+        }
+      } else if (sourceInventory.quantity < item.quantity) {
+        throw new BadRequestException('Insufficient stock remaining at the source branch to approve this item');
+      }
+
+      const updateData: any = { quantity: { decrement: item.quantity } };
+      if (item.variant === 'REFILL') {
+        updateData.fullCylinders = (sourceInventory.fullCylinders ?? 0) - item.quantity;
+      }
+
+      await tx.inventory.update({ where: { id: sourceInventory.id }, data: updateData });
+
+      await tx.stockMovement.create({
+        data: {
+          inventoryId: sourceInventory.id,
+          productId: item.productId,
+          branchId: transfer.fromBranchId,
+          quantityBefore: sourceInventory.quantity,
+          quantityChanged: -item.quantity,
+          quantityAfter: sourceInventory.quantity - item.quantity,
+          movementType: MovementType.TRANSFER_OUT,
+          referenceId: transfer.id,
+          referenceType: 'Transfer',
+          performedById,
+          notes: `Transfer ${transfer.transferCode} out${variantSuffix}`,
+        },
+      });
+    }
+
+    const destInventory = await tx.inventory.findUnique({
+      where: { branchId_productId: { branchId: transfer.toBranchId, productId: item.productId } },
+    });
+
+    if (destInventory) {
+      const updateData: any = { quantity: { increment: item.quantity } };
+      if (item.variant === 'REFILL') {
+        updateData.fullCylinders = (destInventory.fullCylinders ?? 0) + item.quantity;
+      }
+
+      await tx.inventory.update({ where: { id: destInventory.id }, data: updateData });
+
+      await tx.stockMovement.create({
+        data: {
+          inventoryId: destInventory.id,
+          productId: item.productId,
+          branchId: transfer.toBranchId,
+          quantityBefore: destInventory.quantity,
+          quantityChanged: item.quantity,
+          quantityAfter: destInventory.quantity + item.quantity,
+          movementType: MovementType.TRANSFER_IN,
+          referenceId: transfer.id,
+          referenceType: 'Transfer',
+          performedById,
+          notes: `Transfer ${transfer.transferCode} in${variantSuffix}`,
+        },
+      });
+    } else {
+      await tx.inventory.create({
+        data: {
+          branchId: transfer.toBranchId,
+          productId: item.productId,
+          quantity: item.quantity,
+          fullCylinders: item.variant === 'REFILL' ? item.quantity : undefined,
+        },
+      });
+    }
+  }
+
+  // Rolls every item's individual status up into the transfer's overall
+  // status and persists it.
+  private async recomputeTransferStatus(transferId: string): Promise<TransferStatus> {
+    const items = await this.prisma.transferItem.findMany({ where: { transferId } });
+
+    const allPending = items.every((i) => i.status === TransferItemStatus.PENDING);
+    const allApproved = items.every((i) => i.status === TransferItemStatus.APPROVED);
+    const allRejected = items.every((i) => i.status === TransferItemStatus.REJECTED);
+
+    let status: TransferStatus;
+    if (allPending) {
+      status = TransferStatus.PENDING;
+    } else if (allApproved) {
+      status = TransferStatus.APPROVED;
+    } else if (allRejected) {
+      status = TransferStatus.REJECTED;
+    } else {
+      status = TransferStatus.PARTIALLY_APPROVED;
+    }
+
+    await this.prisma.transfer.update({ where: { id: transferId }, data: { status } });
+    return status;
+  }
+
+  private assertIsReceivingManager(transfer: { toBranchId: string }, user: AuthUser) {
+    if (user.branchId !== transfer.toBranchId) {
+      throw new ForbiddenException('Only the receiving branch manager can act on this transfer');
+    }
+  }
+
+  async approveItem(transferId: string, itemId: string, user: AuthUser) {
+    const transfer = await this.prisma.transfer.findUnique({
+      where: { id: transferId },
+      include: { items: { include: { product: true } } },
+    });
+    if (!transfer) {
+      throw new NotFoundException('Transfer not found');
+    }
+
+    this.assertIsReceivingManager(transfer, user);
+
+    const item = transfer.items.find((i) => i.id === itemId);
+    if (!item) {
+      throw new NotFoundException('Transfer item not found');
+    }
+    if (item.status !== TransferItemStatus.PENDING) {
+      throw new BadRequestException(`This item has already been ${item.status.toLowerCase()}`);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.applyItemStockMovement(tx, transfer, item, user.userId);
+      await tx.transferItem.update({ where: { id: itemId }, data: { status: TransferItemStatus.APPROVED } });
+      await tx.transfer.update({ where: { id: transferId }, data: { approvedById: user.userId } });
+    });
+
+    await this.recomputeTransferStatus(transferId);
+
+    await this.notificationsService.create({
+      type: 'TRANSFER_APPROVED',
+      title: 'Transfer Item Approved',
+      message: `${itemLabel(item)} from transfer ${transfer.transferCode} was approved`,
+      userId: transfer.initiatedBy,
+      entityId: transferId,
+      entityType: 'Transfer',
+    });
+
+    return this.findOne(transferId);
+  }
+
+  async rejectItem(transferId: string, itemId: string, user: AuthUser, rejectionReason: string) {
+    if (!rejectionReason || !rejectionReason.trim()) {
+      throw new BadRequestException('A rejection reason is required');
+    }
+
+    const transfer = await this.prisma.transfer.findUnique({
+      where: { id: transferId },
+      include: { items: { include: { product: true } } },
+    });
+    if (!transfer) {
+      throw new NotFoundException('Transfer not found');
+    }
+
+    this.assertIsReceivingManager(transfer, user);
+
+    const item = transfer.items.find((i) => i.id === itemId);
+    if (!item) {
+      throw new NotFoundException('Transfer item not found');
+    }
+    if (item.status !== TransferItemStatus.PENDING) {
+      throw new BadRequestException(`This item has already been ${item.status.toLowerCase()}`);
+    }
+
+    await this.prisma.transferItem.update({
+      where: { id: itemId },
+      data: { status: TransferItemStatus.REJECTED, rejectionReason: rejectionReason.trim() },
+    });
+    await this.prisma.transfer.update({ where: { id: transferId }, data: { approvedById: user.userId } });
+
+    await this.recomputeTransferStatus(transferId);
+
+    await this.notificationsService.create({
+      type: 'TRANSFER_REJECTED',
+      title: 'Transfer Item Rejected',
+      message: `${itemLabel(item)} from transfer ${transfer.transferCode} was rejected. Reason: ${rejectionReason}`,
+      userId: transfer.initiatedBy,
+      entityId: transferId,
+      entityType: 'Transfer',
+    });
+
+    return this.findOne(transferId);
+  }
+
+  // Whole-transfer convenience actions: resolve every still-pending item at
+  // once with the same outcome, using the same per-item logic as
+  // approveItem/rejectItem above.
   async approve(id: string, user: AuthUser) {
     const transfer = await this.prisma.transfer.findUnique({
       where: { id },
       include: { items: { include: { product: true } } },
     });
-
     if (!transfer) {
       throw new NotFoundException('Transfer not found');
     }
 
-    if (transfer.status !== TransferStatus.PENDING) {
-      throw new BadRequestException(`Transfer has already been ${transfer.status.toLowerCase()}`);
+    this.assertIsReceivingManager(transfer, user);
+
+    const pendingItems = transfer.items.filter((i) => i.status === TransferItemStatus.PENDING);
+    if (pendingItems.length === 0) {
+      throw new BadRequestException('There are no pending items left to approve on this transfer');
     }
 
-    // Route is already restricted to BRANCH_MANAGER; enforce it's specifically
-    // the receiving branch's manager (not just any branch manager).
-    if (user.branchId !== transfer.toBranchId) {
-      throw new ForbiddenException('Only the receiving branch manager can approve this transfer');
-    }
-
-    const approvedById = user.userId;
-
-    // Process transfer in transaction
     await this.prisma.$transaction(async (tx) => {
-      // Update transfer status
-      await tx.transfer.update({
-        where: { id },
-        data: {
-          status: TransferStatus.APPROVED,
-          approvedById,
-        },
-      });
-
-      // Process each item
-      for (const item of transfer.items) {
-        // Reduce stock from source
-        const sourceInventory = await tx.inventory.findUnique({
-          where: { branchId_productId: { branchId: transfer.fromBranchId, productId: item.productId } },
-        });
-
-        if (sourceInventory) {
-          await tx.inventory.update({
-            where: { id: sourceInventory.id },
-            data: { quantity: { decrement: item.quantity } },
-          });
-
-          await tx.stockMovement.create({
-            data: {
-              inventoryId: sourceInventory.id,
-              productId: item.productId,
-              branchId: transfer.fromBranchId,
-              quantityBefore: sourceInventory.quantity,
-              quantityChanged: -item.quantity,
-              quantityAfter: sourceInventory.quantity - item.quantity,
-              movementType: MovementType.TRANSFER_OUT,
-              referenceId: id,
-              referenceType: 'Transfer',
-              performedById: approvedById,
-              notes: `Transfer ${transfer.transferCode} out`,
-            },
-          });
-        }
-
-        // Add stock to destination
-        const destInventory = await tx.inventory.findUnique({
-          where: { branchId_productId: { branchId: transfer.toBranchId, productId: item.productId } },
-        });
-
-        if (destInventory) {
-          await tx.inventory.update({
-            where: { id: destInventory.id },
-            data: { quantity: { increment: item.quantity } },
-          });
-
-          await tx.stockMovement.create({
-            data: {
-              inventoryId: destInventory.id,
-              productId: item.productId,
-              branchId: transfer.toBranchId,
-              quantityBefore: destInventory.quantity,
-              quantityChanged: item.quantity,
-              quantityAfter: destInventory.quantity + item.quantity,
-              movementType: MovementType.TRANSFER_IN,
-              referenceId: id,
-              referenceType: 'Transfer',
-              performedById: approvedById,
-              notes: `Transfer ${transfer.transferCode} in`,
-            },
-          });
-        } else {
-          // Create inventory entry for destination if it doesn't exist
-          await tx.inventory.create({
-            data: {
-              branchId: transfer.toBranchId,
-              productId: item.productId,
-              quantity: item.quantity,
-            },
-          });
-        }
+      for (const item of pendingItems) {
+        await this.applyItemStockMovement(tx, transfer, item, user.userId);
+        await tx.transferItem.update({ where: { id: item.id }, data: { status: TransferItemStatus.APPROVED } });
       }
+      await tx.transfer.update({ where: { id }, data: { approvedById: user.userId } });
     });
 
-    // Notify initiator
+    await this.recomputeTransferStatus(id);
+
     await this.notificationsService.create({
       type: 'TRANSFER_APPROVED',
       title: 'Transfer Approved',
-      message: `Your transfer ${transfer.transferCode} (${buildItemsSummary(transfer.items)}) has been approved`,
+      message: `Your transfer ${transfer.transferCode} (${buildItemsSummary(pendingItems)}) has been approved`,
       userId: transfer.initiatedBy,
       entityId: id,
       entityType: 'Transfer',
@@ -316,28 +474,25 @@ export class TransfersService {
       throw new NotFoundException('Transfer not found');
     }
 
-    if (transfer.status !== TransferStatus.PENDING) {
-      throw new BadRequestException(`Transfer has already been ${transfer.status.toLowerCase()}`);
+    this.assertIsReceivingManager(transfer, user);
+
+    const pendingItems = transfer.items.filter((i) => i.status === TransferItemStatus.PENDING);
+    if (pendingItems.length === 0) {
+      throw new BadRequestException('There are no pending items left to reject on this transfer');
     }
 
-    if (user.branchId !== transfer.toBranchId) {
-      throw new ForbiddenException('Only the receiving branch manager can reject this transfer');
-    }
-
-    await this.prisma.transfer.update({
-      where: { id },
-      data: {
-        status: TransferStatus.REJECTED,
-        approvedById: user.userId,
-        rejectionReason: rejectionReason.trim(),
-      },
+    await this.prisma.transferItem.updateMany({
+      where: { id: { in: pendingItems.map((i) => i.id) } },
+      data: { status: TransferItemStatus.REJECTED, rejectionReason: rejectionReason.trim() },
     });
+    await this.prisma.transfer.update({ where: { id }, data: { approvedById: user.userId } });
 
-    // Notify initiator
+    await this.recomputeTransferStatus(id);
+
     await this.notificationsService.create({
       type: 'TRANSFER_REJECTED',
       title: 'Transfer Rejected',
-      message: `Your transfer ${transfer.transferCode} (${buildItemsSummary(transfer.items)}) was rejected. Reason: ${rejectionReason}`,
+      message: `Your transfer ${transfer.transferCode} (${buildItemsSummary(pendingItems)}) was rejected. Reason: ${rejectionReason}`,
       userId: transfer.initiatedBy,
       entityId: id,
       entityType: 'Transfer',
@@ -356,6 +511,12 @@ export class TransfersService {
     });
     if (!transfer) {
       throw new NotFoundException('Transfer not found');
+    }
+
+    if (!transfer.items.every((i) => i.status === TransferItemStatus.PENDING)) {
+      throw new BadRequestException(
+        'This transfer already has items that were approved or rejected and can no longer be cancelled outright',
+      );
     }
 
     if (transfer.status !== TransferStatus.PENDING) {
