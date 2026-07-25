@@ -1,19 +1,36 @@
-import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { IsString, IsEmail, IsOptional, IsNumber } from 'class-validator';
 
 export class LoginDto {
-  @ApiProperty({ example: 'ceo@njugush.co.ke' })
-  @IsEmail({}, { message: 'Please enter a valid email address' })
-  @IsNotEmpty({ message: 'Email is required' })
+  @IsEmail()
   email: string;
 
-  @ApiProperty({ example: 'admin123' })
-  @IsNotEmpty({ message: 'Password is required' })
   @IsString()
   password: string;
 
-  @ApiProperty({ example: 'device-fingerprint-123' })
-  @IsNotEmpty({ message: 'Device fingerprint is required' })
+  // ── Existing device-auth fingerprint ──────────────────────────────────────
+  @IsOptional()
   @IsString()
-  deviceFingerprint: string;
+  deviceFingerprint?: string;
+
+  // ── New: GPS coords from browser Geolocation API (optional) ──────────────
+  @IsOptional()
+  @IsNumber()
+  latitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  longitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  accuracy?: number;
+
+  // ── New: device metadata sent by frontend ─────────────────────────────────
+  @IsOptional()
+  @IsString()
+  deviceType?: string; // 'mobile' | 'tablet' | 'desktop'
+
+  @IsOptional()
+  @IsString()
+  userAgent?: string;
 }
