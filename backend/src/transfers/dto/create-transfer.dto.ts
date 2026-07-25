@@ -1,48 +1,73 @@
-import { IsNotEmpty, IsString, IsOptional, IsArray, ValidateNested, IsNumber, IsPositive, ArrayMinSize, IsIn } from 'class-validator';
+import { IsString, IsArray, IsOptional, IsInt, IsEnum, ValidateNested, ArrayMinSize, Min } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ApiProperty } from '@nestjs/swagger';
+import { LpgComponent } from '@prisma/client';
 
-class TransferItemDto {
-  @ApiProperty()
-  @IsNotEmpty({ message: 'Product ID is required for every transfer item' })
+export class CreateTransferItemDto {
   @IsString()
   productId: string;
 
-  @ApiProperty()
-  @IsNotEmpty()
-  @IsNumber({}, { message: 'Quantity must be a number' })
-  @IsPositive({ message: 'Quantity must be greater than 0' })
+  @IsInt()
+  @Min(1)
   quantity: number;
 
-  // STANDARD for regular products. Cylinder-tracked LPG products must use
-  // REFILL (moves full/gas-filled cylinders) or EMPTY_SHELL (moves empty
-  // shells) instead — see TransfersService.create for the validation.
-  @ApiProperty({ required: false, enum: ['STANDARD', 'REFILL', 'EMPTY_SHELL'], default: 'STANDARD' })
   @IsOptional()
-  @IsIn(['STANDARD', 'REFILL', 'EMPTY_SHELL'])
-  variant?: 'STANDARD' | 'REFILL' | 'EMPTY_SHELL';
-}
+  @IsEnum(LpgComponent)
+  lpgComponent?: LpgComponent;
 
-export class CreateTransferDto {
-  @ApiProperty()
-  @IsNotEmpty({ message: 'Source branch ID is required' })
+  @IsOptional()
   @IsString()
-  fromBranchId: string;
+  cylinderId?: string;
 
-  @ApiProperty()
-  @IsNotEmpty({ message: 'Destination branch ID is required' })
-  @IsString()
-  toBranchId: string;
-
-  @ApiProperty({ type: [TransferItemDto] })
-  @IsArray()
-  @ArrayMinSize(1, { message: 'At least one product must be included in the transfer' })
-  @ValidateNested({ each: true })
-  @Type(() => TransferItemDto)
-  items: TransferItemDto[];
-
-  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   notes?: string;
+}
+
+export class CreateTransferDto {
+  @IsString()
+  toBranchId: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CreateTransferItemDto)
+  @ArrayMinSize(1)
+  items: CreateTransferItemDto[];
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
+}
+
+export class RespondToTransferItemDto {
+  @IsString()
+  itemId: string;
+
+  @IsEnum(['ACCEPTED', 'REJECTED'] as const)
+  status: 'ACCEPTED' | 'REJECTED';
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
+}
+
+export class RespondToTransferDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RespondToTransferItemDto)
+  @ArrayMinSize(1)
+  items: RespondToTransferItemDto[];
+}
+
+export class TransferFilterDto {
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  branchId?: string;
+
+  @IsOptional()
+  @IsString()
+  type?: 'incoming' | 'outgoing'; // For filtering transfers relevant to a branch
 }
