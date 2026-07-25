@@ -4,12 +4,15 @@ import { PassportModule } from '@nestjs/passport';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { AuthController } from './auth.controller';
+import { GeolocationService } from './geolocation.service';
 import { JwtStrategy } from './jwt.strategy';
 import { DevicesModule } from '../devices/devices.module';
 import { AuditLogsModule } from '../audit-logs/audit-logs.module';
+import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
   imports: [
+    PrismaModule,
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.registerAsync({
       imports: [ConfigModule],
@@ -24,8 +27,8 @@ import { AuditLogsModule } from '../audit-logs/audit-logs.module';
     DevicesModule,
     AuditLogsModule,
   ],
-  providers: [AuthService, JwtStrategy],
+  providers: [AuthService, GeolocationService, JwtStrategy],
   controllers: [AuthController],
-  exports: [AuthService],
+  exports: [AuthService, GeolocationService],
 })
 export class AuthModule {}
