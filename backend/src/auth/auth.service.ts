@@ -1,71 +1,104 @@
-import { Injectable, UnauthorizedException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  UnauthorizedException,
+  BadRequestException,
+  ForbiddenException,
+  Logger,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { DevicesService } from '../devices/devices.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
+import { GeolocationService, LocationCheckResult } from './geolocation.service';
 import { LoginDto } from './dto/login.dto';
 import { RequestDeviceCodeDto } from './dto/request-device-code.dto';
 import { VerifyDeviceCodeDto } from './dto/verify-device-code.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private prisma: PrismaService,
     private jwtService: JwtService,
     private configService: ConfigService,
     private devicesService: DevicesService,
     private auditLogsService: AuditLogsService,
+    private geoService: GeolocationService,
   ) {}
 
-  async login(loginDto: LoginDto, deviceInfo: { ipAddress: string; userAgent: string }) {
-    const { email, password, deviceFingerprint } = loginDto;
+  async login(loginDto: LoginDto, ipAddress: string, userAgent: string) {
+    const {
+      email,
+      password,
+      latitude,
+      longitude,
+      accuracy,
+      deviceType,
+      deviceFingerprint,
+    } = loginDto;
 
-    // Find user by email
+    // 1. Find user
     const user = await this.prisma.user.findUnique({
       where: { email },
       include: { branch: true },
     });
 
     if (!user) {
+      await this.recordFailedLogin(
+        null, email, ipAddress, userAgent, latitude, longitude, 'User not found',
+      );
       throw new UnauthorizedException('Incorrect email or password');
     }
 
-    // Verify password
+    // 2. Verify password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
+      await this.recordFailedLogin(
+        user.id, email, ipAddress, userAgent, latitude, longitude, 'Invalid password',
+      );
       await this.auditLogsService.create({
         action: 'LOGIN',
         entityType: 'USER',
-        description: `Failed login attempt for ${email} - incorrect password`,
-        ipAddress: deviceInfo.ipAddress,
-        userAgent: deviceInfo.userAgent,
+        description: `Failed login attempt for ${email} — incorrect password`,
+        ipAddress,
+        userAgent,
       });
       throw new UnauthorizedException('Incorrect email or password');
     }
 
-    // Check if account is active
+    // 3. Check account status
     if (user.status === 'SUSPENDED') {
-      throw new ForbiddenException('Your account has been suspended. Contact administrator.');
+      throw new ForbiddenException(
+        'Your account has been suspended. Contact administrator.',
+      );
     }
     if (user.status === 'INACTIVE') {
-      throw new ForbiddenException('Your account is inactive. Contact administrator.');
+      throw new ForbiddenException(
+        'Your account is inactive. Contact administrator.',
+      );
     }
     if (user.status !== 'ACTIVE') {
+      await this.recordFailedLogin(
+        user.id, email, ipAddress, userAgent, latitude, longitude, 'Account inactive',
+      );
       throw new ForbiddenException('Account is not active');
     }
 
-    // Device check - skip for SUPER_ADMIN
+    // 4. Device check (skip for SUPER_ADMIN)
     if (user.role !== 'SUPER_ADMIN') {
-      const deviceCheck = await this.devicesService.validateDevice(user.id, deviceFingerprint);
+      const deviceCheck = await this.devicesService.validateDevice(
+        user.id,
+        deviceFingerprint,
+      );
 
       if (!deviceCheck.isAuthorized) {
-        // Create pending device request
         const deviceResult = await this.devicesService.requestAuthorization(
           user.id,
           deviceFingerprint,
-          deviceInfo,
+          { ipAddress, userAgent },
         );
 
         return {
@@ -78,41 +111,99 @@ export class AuthService {
       await this.devicesService.updateLastUsed(deviceFingerprint);
     }
 
-    // Update last login
+    // 5. Location check
+    const location =
+      latitude && longitude ? { latitude, longitude, accuracy } : null;
+    const locationCheck = await this.geoService.checkLoginLocation(
+      user.id,
+      user.branchId,
+      location,
+      ipAddress,
+    );
+
+    // 6. Block HIGH-risk logins
+    if (!locationCheck.isAllowed && locationCheck.riskLevel === 'HIGH') {
+      await this.recordBlockedLogin(
+        user.id, email, ipAddress, userAgent, latitude, longitude, locationCheck,
+      );
+      await this.notifyAdminOfSuspiciousLogin(user, locationCheck, ipAddress);
+      throw new ForbiddenException(
+        `Login blocked: ${locationCheck.reason}. Please contact your administrator.`,
+      );
+    }
+
+    // 7. Record login location
+    const loginRecord = await this.prisma.loginLocation.create({
+      data: {
+        userId: user.id,
+        latitude: latitude ?? null,
+        longitude: longitude ?? null,
+        accuracy: accuracy ?? null,
+        ipAddress,
+        userAgent: userAgent ?? null,
+        deviceType: deviceType ?? null,
+        isSuspicious: locationCheck.riskLevel !== 'LOW',
+        status: 'SUCCESS',
+      },
+    });
+
+    // 8. Enrich with IP geolocation if browser location not provided
+    if (!latitude || !longitude) {
+      const ipLocation = await this.geoService.getIpLocation(ipAddress);
+      if (ipLocation.latitude) {
+        await this.prisma.loginLocation.update({
+          where: { id: loginRecord.id },
+          data: {
+            latitude: ipLocation.latitude,
+            longitude: ipLocation.longitude,
+            city: ipLocation.city,
+            region: ipLocation.region,
+            country: ipLocation.country,
+          },
+        });
+      }
+    }
+
+    // 9. Update last login
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastLoginAt: new Date() },
     });
 
-    // Generate JWT
+    // 10. Generate JWT (same payload shape as existing system)
     const payload = {
       sub: user.id,
       email: user.email,
       role: user.role,
       branchId: user.branchId,
     };
-    const token = this.jwtService.sign(payload);
+    const access_token = this.jwtService.sign(payload);
 
-    // Log successful login
+    // 11. Audit log
     await this.auditLogsService.create({
       userId: user.id,
       action: 'LOGIN',
       entityType: 'USER',
       description: `User ${email} logged in successfully`,
-      ipAddress: deviceInfo.ipAddress,
-      userAgent: deviceInfo.userAgent,
+      ipAddress,
+      userAgent,
     });
 
-    // Remove password from response
     const { password: _, ...userWithoutPassword } = user;
 
     return {
-      access_token: token,
+      access_token,
       user: userWithoutPassword,
+      // Only included when MEDIUM risk; undefined otherwise (no noise for normal logins)
+      locationWarning:
+        locationCheck.riskLevel !== 'LOW' ? locationCheck.reason : undefined,
     };
   }
 
-  async requestDeviceCode(requestDto: RequestDeviceCodeDto, deviceInfo: { ipAddress: string; userAgent: string }) {
+  async requestDeviceCode(
+    requestDto: RequestDeviceCodeDto,
+    deviceInfo: { ipAddress: string; userAgent: string },
+  ) {
     const { email, deviceFingerprint } = requestDto;
 
     const user = await this.prisma.user.findUnique({ where: { email } });
@@ -127,15 +218,22 @@ export class AuthService {
     );
 
     return {
-      message: 'Device authorization requested. Please contact admin for approval.',
+      message:
+        'Device authorization requested. Please contact admin for approval.',
       requestId: result.requestId,
     };
   }
 
-  async verifyDeviceCode(verifyDto: VerifyDeviceCodeDto, deviceInfo: { ipAddress: string; userAgent: string }) {
+  async verifyDeviceCode(
+    verifyDto: VerifyDeviceCodeDto,
+    deviceInfo: { ipAddress: string; userAgent: string },
+  ) {
     const { requestId, authorizationCode } = verifyDto;
 
-    const result = await this.devicesService.verifyAuthorizationCode(requestId, authorizationCode);
+    const result = await this.devicesService.verifyAuthorizationCode(
+      requestId,
+      authorizationCode,
+    );
 
     if (!result.valid) {
       throw new BadRequestException('Invalid or expired authorization code');
@@ -150,16 +248,14 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
-    // Generate JWT
     const payload = {
       sub: user.id,
       email: user.email,
       role: user.role,
       branchId: user.branchId,
     };
-    const token = this.jwtService.sign(payload);
+    const access_token = this.jwtService.sign(payload);
 
-    // Log device approval
     await this.auditLogsService.create({
       userId: user.id,
       action: 'DEVICE_APPROVED',
@@ -171,13 +267,13 @@ export class AuthService {
 
     const { password: _, ...userWithoutPassword } = user;
 
-    return {
-      access_token: token,
-      user: userWithoutPassword,
-    };
+    return { access_token, user: userWithoutPassword };
   }
 
-  async logout(userId: string, deviceInfo: { ipAddress: string; userAgent: string }) {
+  async logout(
+    userId: string,
+    deviceInfo: { ipAddress: string; userAgent: string },
+  ) {
     await this.auditLogsService.create({
       userId,
       action: 'LOGOUT',
@@ -194,5 +290,89 @@ export class AuthService {
       where: { id: userId },
       include: { branch: true },
     });
+  }
+
+  // ─── Private helpers ───────────────────────────────────────────────────────
+
+  private async recordFailedLogin(
+    userId: string | null,
+    email: string,
+    ipAddress: string,
+    userAgent: string,
+    latitude?: number,
+    longitude?: number,
+    reason?: string,
+  ) {
+    if (userId) {
+      try {
+        await this.prisma.loginLocation.create({
+          data: {
+            userId,
+            latitude: latitude ?? null,
+            longitude: longitude ?? null,
+            ipAddress,
+            userAgent,
+            status: 'FAILED',
+            blockReason: reason,
+          },
+        });
+      } catch (e) {
+        this.logger.warn('Could not record failed login location', e);
+      }
+    }
+    this.logger.warn(
+      `Failed login for ${email} from ${ipAddress}: ${reason}`,
+    );
+  }
+
+  private async recordBlockedLogin(
+    userId: string,
+    email: string,
+    ipAddress: string,
+    userAgent: string,
+    latitude?: number,
+    longitude?: number,
+    locationCheck?: LocationCheckResult,
+  ) {
+    try {
+      await this.prisma.loginLocation.create({
+        data: {
+          userId,
+          latitude: latitude ?? null,
+          longitude: longitude ?? null,
+          ipAddress,
+          userAgent,
+          isSuspicious: true,
+          status: 'BLOCKED',
+          blockReason: locationCheck?.reason,
+        },
+      });
+    } catch (e) {
+      this.logger.warn('Could not record blocked login location', e);
+    }
+    this.logger.warn(
+      `Blocked login for ${email} from ${ipAddress}: ${locationCheck?.reason}`,
+    );
+  }
+
+  private async notifyAdminOfSuspiciousLogin(
+    user: any,
+    locationCheck: LocationCheckResult,
+    ipAddress: string,
+  ) {
+    try {
+      await this.prisma.notification.create({
+        data: {
+          type: 'SYSTEM',
+          title: 'Suspicious Login Attempt Blocked',
+          message: `${user.firstName} ${user.lastName} (${user.email}) was blocked from logging in. Reason: ${locationCheck.reason}. IP: ${ipAddress}`,
+          userId: null, // global — picked up by admin dashboard
+          entityId: user.id,
+          entityType: 'USER',
+        },
+      });
+    } catch (e) {
+      this.logger.warn('Could not create suspicious login notification', e);
+    }
   }
 }
