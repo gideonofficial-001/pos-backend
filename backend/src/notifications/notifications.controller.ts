@@ -1,44 +1,51 @@
-import { Controller, Get, Patch, Param, UseGuards } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { Controller, Get, Post, Param, Request, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiBearerAuth, ApiOperation } from '@nestjs/swagger';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { GetUser } from '../auth/decorators/get-user.decorator';
 
 @ApiTags('Notifications')
 @Controller('notifications')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard)
 @ApiBearerAuth()
 export class NotificationsController {
   constructor(private notificationsService: NotificationsService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Get all notifications' })
-  async findAll(@GetUser('userId') userId: string) {
-    return this.notificationsService.findAll(userId);
+  @ApiOperation({
+    summary:
+      'Get notifications — transfer notifications are hidden for Admin/Manager',
+  })
+  async getNotifications(@Request() req) {
+    return this.notificationsService.getNotifications(
+      req.user.userId,
+      req.user.role,
+    );
   }
 
   @Get('unread-count')
-  @ApiOperation({ summary: 'Get unread notification count' })
-  async getUnreadCount(@GetUser('userId') userId: string) {
-    return this.notificationsService.getUnreadCount(userId);
+  @ApiOperation({ summary: 'Get unread notification count (role-aware)' })
+  async getUnreadCount(@Request() req) {
+    return this.notificationsService.getUnreadCount(
+      req.user.userId,
+      req.user.role,
+    );
   }
 
   @Get('pending-approvals')
-  @ApiOperation({ summary: 'Get pending approvals summary' })
+  @ApiOperation({ summary: 'Get pending approvals count' })
   async getPendingApprovals() {
     return this.notificationsService.getPendingApprovals();
   }
 
-  @Patch(':id/read')
-  @ApiOperation({ summary: 'Mark notification as read' })
-  async markAsRead(@Param('id') id: string) {
-    return this.notificationsService.markAsRead(id);
+  @Post(':id/read')
+  @ApiOperation({ summary: 'Mark a notification as read' })
+  async markAsRead(@Param('id') id: string, @Request() req) {
+    return this.notificationsService.markAsRead(id, req.user.userId);
   }
 
-  @Patch('read-all')
+  @Post('read-all')
   @ApiOperation({ summary: 'Mark all notifications as read' })
-  async markAllAsRead(@GetUser('userId') userId: string) {
-    return this.notificationsService.markAllAsRead(userId);
+  async markAllAsRead(@Request() req) {
+    return this.notificationsService.markAllAsRead(req.user.userId);
   }
 }
