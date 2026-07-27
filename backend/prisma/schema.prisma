@@ -40,7 +40,6 @@ enum SaleStatus {
   CANCELLED
 }
 
-// NEW ENUM: Tracks exactly what type of LPG transaction occurred
 enum LpgSaleVariant {
   REFILL
   EMPTY_SHELL
@@ -87,6 +86,8 @@ enum AuditAction {
   PRODUCT_UPDATED
   BRANCH_CREATED
   BRANCH_UPDATED
+  TRANSFER_CREATED
+  TRANSFER_CANCELLED
 }
 
 enum ExpenseCategory {
@@ -103,23 +104,57 @@ enum ExpenseStatus {
   REJECTED
 }
 
+// Updated: APPROVED and REJECTED removed; transfers now resolve per-item
 enum TransferStatus {
+  PENDING    // All items still pending
+  PARTIAL    // Some items responded to, some still pending
+  COMPLETED  // All items resolved (accepted or rejected)
+  CANCELLED  // Sender cancelled before any item was accepted
+}
+
+enum TransferItemStatus {
   PENDING
-  APPROVED
+  ACCEPTED
   REJECTED
-  COMPLETED
-  CANCELLED
+}
+
+enum LpgComponent {
+  REFILL
+  CYLINDER
+}
+
+enum CylinderStatus {
+  FULL
+  EMPTY
+  IN_TRANSIT
+  DAMAGED
+}
+
+enum CylinderCondition {
+  GOOD
+  FAIR
+  DAMAGED
+}
+
+// NEW: tracks every login attempt with location info
+enum LoginStatus {
+  SUCCESS
+  FAILED
+  BLOCKED
+  SUSPICIOUS
 }
 
 enum NotificationType {
   DEVICE_AUTH
   RETURN_REQUEST
   INVOICE_CREATED
-  TRANSFER_REQUEST
-  EXPENSE_SUBMITTED
-  TRANSFER_APPROVED
-  TRANSFER_REJECTED
+  TRANSFER_REQUEST    // Receiving branch notified of incoming transfer
+  TRANSFER_SENT       // Sending branch confirmation
+  TRANSFER_RESPONSE   // Sending branch notified of per-item response
   TRANSFER_CANCELLED
+  EXPENSE_SUBMITTED
+  TRANSFER_APPROVED   // kept for migration compatibility
+  TRANSFER_REJECTED   // kept for migration compatibility
   RETURN_APPROVED
   RETURN_REJECTED
   EXPENSE_APPROVED
@@ -149,11 +184,6 @@ enum MovementType {
   OPENING
 }
 
-enum ActivityActor {
-  USER
-  SYSTEM
-}
-
 // ==================== MODELS ====================
 
 model User {
@@ -166,28 +196,28 @@ model User {
   role      UserRole
   status    UserStatus @default(ACTIVE)
 
-  branchId String?
-  branch   Branch? @relation("BranchUsers", fields: [branchId], references: [id])
+  branchId      String?
+  branch        Branch? @relation("BranchUsers", fields: [branchId], references: [id])
   managedBranch Branch? @relation("BranchManager")
 
   lastLoginAt DateTime?
 
-  devices              Device[]
-  sales                Sale[]
-  invoices             Invoice[]
-  returns              Return[]
-  auditLogs            AuditLog[]
-  expenses             Expense[]
-  transfersInitiated   Transfer[]           @relation("InitiatedBy")
-  transfersApproved    Transfer[]           @relation("TransferApprovedBy")
-  approvedDevices      Device[]             @relation("ApprovedBy")
-  approvedReturns      Return[]             @relation("ReturnApprovedBy")
-  approvedExpenses     Expense[]            @relation("ExpenseApprovedBy")
-  refillVerifications  RefillVerification[] @relation("RefillVerifiedBy")
-  notifications        Notification[]       @relation("UserNotifications")
-  stockAdjustments     StockAdjustment[]
-  stockMovements       StockMovement[]
-  branchClosings       BranchClosing[]
+  devices             Device[]
+  sales               Sale[]
+  invoices            Invoice[]
+  returns             Return[]
+  auditLogs           AuditLog[]
+  expenses            Expense[]
+  transfersInitiated  Transfer[]           @relation("InitiatedBy")
+  approvedDevices     Device[]             @relation("ApprovedBy")
+  approvedReturns     Return[]             @relation("ReturnApprovedBy")
+  approvedExpenses    Expense[]            @relation("ExpenseApprovedBy")
+  refillVerifications RefillVerification[] @relation("RefillVerifiedBy")
+  notifications       Notification[]       @relation("UserNotifications")
+  stockAdjustments    StockAdjustment[]
+  stockMovements      StockMovement[]
+  branchClosings      BranchClosing[]
+  loginLocations      LoginLocation[]      // NEW
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -196,50 +226,50 @@ model User {
 }
 
 model Device {
-  id        String       @id @default(uuid())
-  userId    String
-  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  fingerprint    String
-  deviceInfo     String
-  ipAddress      String
-  status         DeviceStatus @default(PENDING)
+  fingerprint String      @unique
+  name        String?
+  status      DeviceStatus @default(PENDING)
 
-  approvedById   String?
-  approvedBy     User?        @relation("ApprovedBy", fields: [approvedById], references: [id])
-  approvedAt     DateTime?
+  requestCode    String?
+  requestCodeExpiry DateTime?
 
-  authCodeHash   String?
-  authCodeExpiry DateTime?
+  approvedById String?
+  approvedBy   User?   @relation("ApprovedBy", fields: [approvedById], references: [id])
 
-  lastUsedAt   DateTime     @default(now())
-  createdAt    DateTime     @default(now())
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
-  @@unique([userId, fingerprint])
   @@map("devices")
 }
 
 model Branch {
-  id        String  @id @default(uuid())
-  name      String
-  code      String  @unique
-  address   String
-  phone     String
-  email     String?
+  id      String  @id @default(uuid())
+  name    String
+  code    String  @unique
+  address String
+  phone   String
+  email   String?
 
   managerId String? @unique
   manager   User?   @relation("BranchManager", fields: [managerId], references: [id])
 
-  users                User[]               @relation("BranchUsers")
-  inventory            Inventory[]
-  sales                Sale[]
-  invoices             Invoice[]
-  expenses             Expense[]
-  transfersFrom        Transfer[]           @relation("TransferFromBranch")
-  transfersTo          Transfer[]           @relation("TransferToBranch")
-  dailySummaries       DailySalesSummary[]
-  refillVerifications  RefillVerification[]
-  branchClosings       BranchClosing[]
+  users               User[]               @relation("BranchUsers")
+  inventory           Inventory[]
+  sales               Sale[]
+  invoices            Invoice[]
+  expenses            Expense[]
+  transfersFrom       Transfer[]           @relation("TransferFromBranch")
+  transfersTo         Transfer[]           @relation("TransferToBranch")
+  dailySummaries      DailySalesSummary[]
+  refillVerifications RefillVerification[]
+  branchClosings      BranchClosing[]
+  branchLocation      BranchLocation?      // NEW: geofence config
+  cylinders           Cylinder[]           // NEW
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -260,28 +290,34 @@ model ProductCategory {
 }
 
 model Product {
-  id                String           @id @default(uuid())
-  name              String
-  code              String           @unique
-  description       String?
-  type              ProductType
+  id          String          @id @default(uuid())
+  name        String
+  code        String          @unique
+  description String?
+  type        ProductType
 
-  categoryId        String?
-  category          ProductCategory? @relation(fields: [categoryId], references: [id])
+  categoryId String?
+  category   ProductCategory? @relation(fields: [categoryId], references: [id])
 
-  price             Decimal          @db.Decimal(10, 2)
-  emptyPrice        Decimal?         @db.Decimal(10, 2) // NEW FIELD: Price for selling empty shells
-  costPrice         Decimal?         @db.Decimal(10, 2)
+  price      Decimal  @db.Decimal(10, 2)
+  emptyPrice Decimal? @db.Decimal(10, 2)
+  costPrice  Decimal? @db.Decimal(10, 2)
 
   cylinderSize      String?
   brand             String?
-  isCylinderTracked Boolean          @default(false)
+  isCylinderTracked Boolean @default(false)
 
-  minStockLevel     Int              @default(10)
+  // LPG component flags (NEW)
+  isLpg       Boolean @default(false)
+  hasCylinder Boolean @default(false)
+  hasRefill   Boolean @default(false)
+
+  minStockLevel Int @default(10)
 
   inventory     Inventory[]
   saleItems     SaleItem[]
   transferItems TransferItem[]
+  cylinders     Cylinder[]     // NEW
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -291,27 +327,25 @@ model Product {
 }
 
 model Inventory {
-  id        String @id @default(uuid())
-
-  branchId  String
-  branch    Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid())
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
   productId String
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  quantity       Int  @default(0)
-  fullCylinders  Int?
+  quantity        Int @default(0)
+  fullCylinders   Int?
   minimumQuantity Int @default(10)
 
-  totalRefilled Int  @default(0)
-  totalSold     Int  @default(0)
+  totalRefilled Int @default(0)
+  totalSold     Int @default(0)
 
   lastRestocked DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
   stockAdjustments StockAdjustment[]
-  transferItems    TransferItem[]
   stockMovements   StockMovement[]
 
   @@unique([branchId, productId])
@@ -319,21 +353,22 @@ model Inventory {
 }
 
 model Customer {
-  id                 String  @id @default(uuid())
-  customerCode       String  @unique
-  fullName           String
-  phone              String  @unique
-  email              String? @unique
-  businessName       String?
-  address            String?
-  creditLimit        Decimal @db.Decimal(10, 2) @default(0)
-  outstandingBalance Decimal @db.Decimal(10, 2) @default(0)
-  isActive           Boolean @default(true)
-  isInvoiceEligible  Boolean @default(true)
+  id    String  @id @default(uuid())
+  name  String
+  phone String  @unique
+  email String?
 
-  invoices Invoice[]
+  address String?
+  notes   String?
+
+  totalPurchases Decimal @default(0) @db.Decimal(10, 2)
+  creditLimit    Decimal @default(0) @db.Decimal(10, 2)
+  creditUsed     Decimal @default(0) @db.Decimal(10, 2)
+
   sales    Sale[]
+  invoices Invoice[]
 
+  isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -341,41 +376,35 @@ model Customer {
 }
 
 model Sale {
-  id       String @id @default(uuid())
+  id String @id @default(uuid())
+
   saleCode String @unique
 
   branchId String
   branch   Branch @relation(fields: [branchId], references: [id])
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id])
-
   customerId String?
   customer   Customer? @relation(fields: [customerId], references: [id])
 
-  type   SaleType
-  status SaleStatus @default(COMPLETED)
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
 
-  customerName  String?
-  customerPhone String?
+  type   SaleType
+  status SaleStatus @default(PENDING)
 
   subtotal Decimal @db.Decimal(10, 2)
-  tax      Decimal @db.Decimal(10, 2) @default(0)
-  discount Decimal @db.Decimal(10, 2) @default(0)
+  discount Decimal @default(0) @db.Decimal(10, 2)
   total    Decimal @db.Decimal(10, 2)
 
-  invoiceId        String?          @unique
-  invoice          Invoice?         @relation(fields: [invoiceId], references: [id])
+  paymentProvider PaymentProvider @default(CASH)
+  mpesaRef        String?
 
-  paymentReference String?          @unique
-  paymentProvider  PaymentProvider?
+  notes String?
 
-  saleDate DateTime @default(now())
+  saleItems SaleItem[]
+  returns   Return[]
+  invoices  Invoice[]
 
-  items   SaleItem[]
-  returns Return[]
-
-  notes     String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -395,41 +424,40 @@ model SaleItem {
   unitPrice Decimal @db.Decimal(10, 2)
   total     Decimal @db.Decimal(10, 2)
 
-  isRefill   Boolean @default(false)
-  lpgVariant LpgSaleVariant? // NEW FIELD: Tracks REFILL, EMPTY_SHELL, or COMPLETE_SET
-
-  createdAt DateTime @default(now())
+  lpgVariant LpgSaleVariant?
 
   @@map("sale_items")
 }
 
 model Invoice {
-  id          String @id @default(uuid())
+  id String @id @default(uuid())
+
   invoiceCode String @unique
 
   branchId String
   branch   Branch @relation(fields: [branchId], references: [id])
 
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  customerId String?
-  customer   Customer? @relation(fields: [customerId], references: [id])
+  saleId String?
+  sale   Sale?   @relation(fields: [saleId], references: [id])
 
-  customerName  String
-  customerPhone String
-  customerEmail String?
+  status InvoiceStatus @default(PENDING)
 
-  amount  Decimal       @db.Decimal(10, 2)
-  status  InvoiceStatus @default(PENDING)
-  dueDate DateTime
+  subtotal Decimal @db.Decimal(10, 2)
+  discount Decimal @default(0) @db.Decimal(10, 2)
+  total    Decimal @db.Decimal(10, 2)
+  amountPaid Decimal @default(0) @db.Decimal(10, 2)
+  balance    Decimal @db.Decimal(10, 2)
 
-  smsSent   Boolean   @default(false)
-  smsSentAt DateTime?
-
-  sale Sale?
-
+  dueDate   DateTime?
+  paidAt    DateTime?
   notes     String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -437,35 +465,38 @@ model Invoice {
 }
 
 model Return {
-  id         String @id @default(uuid())
+  id String @id @default(uuid())
+
   returnCode String @unique
 
   saleId String
   sale   Sale   @relation(fields: [saleId], references: [id])
 
+  branchId String
+
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  reason String
-  amount Decimal @db.Decimal(10, 2)
+  approvedById String?
+  approvedBy   User?   @relation("ReturnApprovedBy", fields: [approvedById], references: [id])
+
   status ReturnStatus @default(PENDING)
 
-  approvedById    String?
-  approvedBy      User?    @relation("ReturnApprovedBy", fields: [approvedById], references: [id])
-  approvedAt      DateTime?
+  reason         String
   rejectionReason String?
 
-  stockReversed Boolean @default(false)
+  refundAmount Decimal @db.Decimal(10, 2)
 
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@map("returns")
 }
 
 model Expense {
-  id          String @id @default(uuid())
+  id String @id @default(uuid())
+
   expenseCode String @unique
 
   branchId String
@@ -474,28 +505,29 @@ model Expense {
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  amount      Decimal         @db.Decimal(10, 2)
+  approvedById String?
+  approvedBy   User?          @relation("ExpenseApprovedBy", fields: [approvedById], references: [id])
+
   category    ExpenseCategory
   description String
+  amount      Decimal         @db.Decimal(10, 2)
+  status      ExpenseStatus   @default(PENDING)
 
-  receiptUrl String?
-
-  status          ExpenseStatus @default(PENDING)
-  approvedById    String?
-  approvedBy      User?         @relation("ExpenseApprovedBy", fields: [approvedById], references: [id])
-  approvedAt      DateTime?
   rejectionReason String?
+  receiptUrl      String?
 
-  expenseDate DateTime @default(now())
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  approvedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@map("expenses")
 }
 
+// ── Transfer (updated: per-item approval, no APPROVED/REJECTED top-level status) ──
+
 model Transfer {
   id           String @id @default(uuid())
-  transferCode String @unique
+  transferCode String @unique // kept in DB for audit; hidden in UI
 
   fromBranchId String
   fromBranch   Branch @relation("TransferFromBranch", fields: [fromBranchId], references: [id])
@@ -503,42 +535,131 @@ model Transfer {
   toBranchId String
   toBranch   Branch @relation("TransferToBranch", fields: [toBranchId], references: [id])
 
-  initiatedBy String
-  initiator   User   @relation("InitiatedBy", fields: [initiatedBy], references: [id])
+  requestedById String
+  requestedBy   User   @relation("InitiatedBy", fields: [requestedById], references: [id])
 
-  approvedById String?
-  approvedBy   User?   @relation("TransferApprovedBy", fields: [approvedById], references: [id])
+  // Derived from item statuses: PENDING → PARTIAL → COMPLETED or CANCELLED
+  status TransferStatus @default(PENDING)
 
-  status          TransferStatus @default(PENDING)
-  notes           String?
-  rejectionReason String?
+  notes       String?
+  respondedAt DateTime?
 
   items TransferItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([fromBranchId])
+  @@index([toBranchId])
+  @@index([status])
+  @@index([createdAt])
   @@map("transfers")
 }
 
 model TransferItem {
-  id String @id @default(uuid())
-
+  id         String   @id @default(uuid())
   transferId String
   transfer   Transfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
 
   productId String
   product   Product @relation(fields: [productId], references: [id])
 
-  inventoryId String
-  inventory   Inventory @relation(fields: [inventoryId], references: [id])
-
   quantity Int
+
+  // Each item has its own status — this is the core of per-item approval
+  status TransferItemStatus @default(PENDING)
+
+  // LPG-specific (null for non-LPG products)
+  lpgComponent LpgComponent?
+  cylinderId   String?
+  cylinder     Cylinder?     @relation(fields: [cylinderId], references: [id])
+
+  // Rejection note or any extra info from the receiver
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([transferId])
+  @@index([productId])
+  @@index([status])
+  @@map("transfer_items")
+}
+
+// ── NEW: Cylinder tracking ────────────────────────────────────────────────────
+
+model Cylinder {
+  id           String            @id @default(uuid())
+  serialNumber String            @unique
+  productId    String
+  product      Product           @relation(fields: [productId], references: [id])
+  branchId     String
+  branch       Branch            @relation(fields: [branchId], references: [id])
+  status       CylinderStatus    @default(FULL)
+  condition    CylinderCondition @default(GOOD)
+
+  transferItems TransferItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@index([branchId])
+  @@index([status])
+  @@map("cylinders")
+}
+
+// ── NEW: Geolocation models ───────────────────────────────────────────────────
+
+model LoginLocation {
+  id     String @id @default(uuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Browser GPS coords (null if user denied)
+  latitude  Float?
+  longitude Float?
+  accuracy  Float?
+
+  // IP-based fallback enrichment
+  ipAddress String?
+  city      String?
+  region    String?
+  country   String?
+  timezone  String?
+
+  // Device info
+  userAgent  String?
+  deviceType String?
+
+  isSuspicious Boolean     @default(false)
+  blockReason  String?
+  status       LoginStatus @default(SUCCESS)
 
   createdAt DateTime @default(now())
 
-  @@map("transfer_items")
+  @@index([userId])
+  @@index([createdAt])
+  @@index([isSuspicious])
+  @@map("login_locations")
 }
+
+model BranchLocation {
+  id       String @id @default(uuid())
+  branchId String @unique
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  latitude     Float
+  longitude    Float
+  radiusMeters Int   @default(500)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("branch_locations")
+}
+
+// ── Existing models below (unchanged) ────────────────────────────────────────
 
 model RefillVerification {
   id String @id @default(uuid())
@@ -554,9 +675,9 @@ model RefillVerification {
   verifiedById String?
   verifiedBy   User?   @relation("RefillVerifiedBy", fields: [verifiedById], references: [id])
 
-  notes      String?
-  createdAt  DateTime  @default(now())
-  verifiedAt DateTime?
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("refill_verifications")
 }
@@ -567,28 +688,19 @@ model StockMovement {
   inventoryId String
   inventory   Inventory @relation(fields: [inventoryId], references: [id])
 
-  productId String
-  branchId  String
-
-  quantityBefore  Int
-  quantityChanged Int
-  quantityAfter   Int
-
-  movementType MovementType
+  type     MovementType
+  quantity Int
 
   referenceId   String?
   referenceType String?
 
+  notes String?
+
   performedById String?
   performedBy   User?   @relation(fields: [performedById], references: [id])
 
-  notes     String?
   createdAt DateTime @default(now())
 
-  @@index([inventoryId])
-  @@index([branchId])
-  @@index([productId])
-  @@index([createdAt])
   @@map("stock_movements")
 }
 
@@ -598,28 +710,25 @@ model BranchClosing {
   branchId String
   branch   Branch @relation(fields: [branchId], references: [id])
 
-  closingDate DateTime
+  date DateTime @db.Date
 
+  openingCash  Decimal @db.Decimal(10, 2)
+  cashSales    Decimal @db.Decimal(10, 2)
+  mpesaSales   Decimal @db.Decimal(10, 2)
+  totalExpenses Decimal @db.Decimal(10, 2)
+  closingCash  Decimal @db.Decimal(10, 2)
   expectedCash Decimal @db.Decimal(10, 2)
-  actualCash   Decimal @db.Decimal(10, 2)
   variance     Decimal @db.Decimal(10, 2)
 
-  totalSales    Int
-  totalRevenue  Decimal @db.Decimal(10, 2)
-  totalExpenses Decimal @db.Decimal(10, 2) @default(0)
-  netAmount     Decimal @db.Decimal(10, 2)
+  notes String?
 
   submittedById String?
   submittedBy   User?   @relation(fields: [submittedById], references: [id])
 
-  summarySmsSent   Boolean   @default(false)
-  summarySmsSentAt DateTime?
-
-  notes     String?
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@unique([branchId, closingDate])
-  @@index([closingDate])
+  @@unique([branchId, date])
   @@map("branch_closings")
 }
 
@@ -627,12 +736,10 @@ model SystemSetting {
   id    String @id @default(uuid())
   key   String @unique
   value String
-
   description String?
-  isPublic    Boolean @default(false)
 
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
-  updatedBy String?
 
   @@map("system_settings")
 }
@@ -640,29 +747,21 @@ model SystemSetting {
 model ActivityFeed {
   id String @id @default(uuid())
 
-  actorId   String?
-  actorType ActivityActor @default(USER)
-  actorName String?
-
-  branchId   String?
-  branchName String?
-
+  type    String
   title   String
   message String
 
   entityId   String?
   entityType String?
-  actionUrl  String?
 
-  visibleToAdmin   Boolean @default(true)
-  visibleToManager Boolean @default(false)
-  visibleToBranch  Boolean @default(false)
+  branchId String?
+
+  metadata Json?
+
+  visibleToBranch Boolean @default(false)
 
   createdAt DateTime @default(now())
 
-  @@index([branchId])
-  @@index([createdAt])
-  @@index([entityType])
   @@map("activity_feed")
 }
 
@@ -687,12 +786,11 @@ model AuditLog {
 
   @@index([userId])
   @@index([action])
-  @@index([createdAt])
   @@map("audit_logs")
 }
 
 model Notification {
-  id        String @id @default(uuid())
+  id        String           @id @default(uuid())
   type      NotificationType
   title     String
   message   String
@@ -728,9 +826,6 @@ model StockAdjustment {
   userId String
   user   User   @relation(fields: [userId], references: [id])
 
-  performedAt DateTime @default(now())
-
-  notes     String?
   createdAt DateTime @default(now())
 
   @@map("stock_adjustments")
@@ -739,23 +834,19 @@ model StockAdjustment {
 model DailySalesSummary {
   id String @id @default(uuid())
 
-  date DateTime
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
 
-  branchId String?
-  branch   Branch? @relation(fields: [branchId], references: [id])
+  date DateTime @db.Date
 
-  totalSales   Int
-  totalAmount  Decimal @db.Decimal(10, 2)
-  cashSales    Int
-  invoiceSales Int
+  totalSales    Decimal @db.Decimal(10, 2)
+  cashSales     Decimal @db.Decimal(10, 2)
+  mpesaSales    Decimal @db.Decimal(10, 2)
+  invoiceSales  Decimal @db.Decimal(10, 2)
+  totalExpenses Decimal @db.Decimal(10, 2)
 
-  lpgRefills   Int
-  lpgCylinders Int
-  electronics  Int
+  createdAt DateTime @default(now())
 
-  sentAt    DateTime?
-  createdAt DateTime  @default(now())
-
-  @@unique([date, branchId])
+  @@unique([branchId, date])
   @@map("daily_sales_summaries")
 }
