@@ -1,6 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { NotificationStatus } from '@prisma/client';
+import { NotificationStatus, UserRole } from '@prisma/client';
+
+// Transfer notification types — only branch managers involved in a transfer see these
+const TRANSFER_TYPES = [
+  'TRANSFER_REQUEST',
+  'TRANSFER_SENT',
+  'TRANSFER_RESPONSE',
+  'TRANSFER_CANCELLED',
+  'TRANSFER_APPROVED',  // legacy
+  'TRANSFER_REJECTED',  // legacy
+] as const;
 
 @Injectable()
 export class NotificationsService {
@@ -8,7 +18,16 @@ export class NotificationsService {
 
   constructor(private prisma: PrismaService) {}
 
-  async create(data: { type: string; title: string; message: string; userId?: string; entityId?: string; entityType?: string }) {
+  // ── Create (existing, unchanged) ─────────────────────────────────────────
+
+  async create(data: {
+    type: string;
+    title: string;
+    message: string;
+    userId?: string;
+    entityId?: string;
+    entityType?: string;
+  }) {
     try {
       return this.prisma.notification.create({
         data: {
@@ -27,15 +46,30 @@ export class NotificationsService {
     }
   }
 
+  // ── Role-aware notification fetch ─────────────────────────────────────────
+  //
+  // Rules:
+  //   SUPER_ADMIN / OVERALL_MANAGER → see everything EXCEPT transfer notifications
+  //   BRANCH_MANAGER               → see their own + global (includes transfers for
+  //                                   their branch because those are userId-scoped)
+
+  async getNotifications(userId: string, userRole: UserRole) {
+    const where = this.buildWhere(userId, userRole);
+
+    return this.prisma.notification.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
+  }
+
+  // ── findAll (kept for backwards compat with older controllers) ────────────
+
   async findAll(userId?: string) {
     const where: any = {};
     if (userId) {
-      where.OR = [
-        { userId },
-        { userId: null }, // System-wide notifications
-      ];
+      where.OR = [{ userId }, { userId: null }];
     }
-
     return this.prisma.notification.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -43,17 +77,30 @@ export class NotificationsService {
     });
   }
 
-  async getUnreadCount(userId: string) {
-    const count = await this.prisma.notification.count({
-      where: {
-        OR: [{ userId }, { userId: null }],
-        status: NotificationStatus.UNREAD,
-      },
-    });
+  // ── Unread count (role-aware) ─────────────────────────────────────────────
+
+  async getUnreadCount(userId: string, userRole?: UserRole) {
+    const base = this.buildWhere(userId, userRole);
+    const where = { ...base, status: NotificationStatus.UNREAD };
+
+    const count = await this.prisma.notification.count({ where });
     return { count };
   }
 
-  async markAsRead(id: string) {
+  // ── Mark as read ──────────────────────────────────────────────────────────
+
+  async markAsRead(id: string, userId?: string) {
+    if (userId) {
+      // Scope to notifications the user can see (own + global)
+      return this.prisma.notification.updateMany({
+        where: {
+          id,
+          OR: [{ userId }, { userId: null }],
+        },
+        data: { status: NotificationStatus.READ, readAt: new Date() },
+      });
+    }
+
     return this.prisma.notification.update({
       where: { id },
       data: { status: NotificationStatus.READ, readAt: new Date() },
@@ -70,20 +117,55 @@ export class NotificationsService {
     });
   }
 
+  // ── Pending approvals (existing, unchanged) ───────────────────────────────
+
   async getPendingApprovals() {
-    const [pendingReturns, pendingDevices, pendingTransfers, pendingExpenses] = await Promise.all([
-      this.prisma.return.count({ where: { status: 'PENDING' } }),
-      this.prisma.device.count({ where: { status: 'PENDING' } }),
-      this.prisma.transfer.count({ where: { status: 'PENDING' } }),
-      this.prisma.expense.count({ where: { status: 'PENDING' } }),
-    ]);
+    const [pendingReturns, pendingDevices, pendingTransfers, pendingExpenses] =
+      await Promise.all([
+        this.prisma.return.count({ where: { status: 'PENDING' } }),
+        this.prisma.device.count({ where: { status: 'PENDING' } }),
+        this.prisma.transfer.count({ where: { status: 'PENDING' } }),
+        this.prisma.expense.count({ where: { status: 'PENDING' } }),
+      ]);
 
     return {
       pendingReturns,
       pendingDevices,
       pendingTransfers,
       pendingExpenses,
-      total: pendingReturns + pendingDevices + pendingTransfers + pendingExpenses,
+      total:
+        pendingReturns + pendingDevices + pendingTransfers + pendingExpenses,
+    };
+  }
+
+  // ── Private ───────────────────────────────────────────────────────────────
+
+  private buildWhere(userId: string, userRole?: UserRole) {
+    const isAdmin =
+      userRole === UserRole.SUPER_ADMIN ||
+      userRole === UserRole.OVERALL_MANAGER;
+
+    if (isAdmin) {
+      // Admins see their own + global notifications but NOT transfer noise
+      return {
+        AND: [
+          {
+            OR: [{ userId }, { userId: null }],
+          },
+          {
+            NOT: {
+              type: { in: TRANSFER_TYPES as any },
+            },
+          },
+        ],
+      };
+    }
+
+    // Branch managers see all their own + global notifications
+    // Transfer notifications for their branch are userId-scoped in transfer.service.ts
+    // so they naturally appear here
+    return {
+      OR: [{ userId }, { userId: null }],
     };
   }
 }
