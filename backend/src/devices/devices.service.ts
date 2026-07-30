@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { DeviceStatus } from '@prisma/client';
@@ -23,11 +27,12 @@ export class DevicesService {
   }
 
   async validateDevice(userId: string, fingerprint: string) {
+    // fingerprint is globally unique per schema
     const device = await this.prisma.device.findUnique({
-      where: { userId_fingerprint: { userId, fingerprint } },
+      where: { fingerprint },
     });
 
-    if (!device) {
+    if (!device || device.userId !== userId) {
       return { isAuthorized: false };
     }
 
@@ -38,32 +43,36 @@ export class DevicesService {
     return { isAuthorized: true };
   }
 
-  async requestAuthorization(userId: string, fingerprint: string, deviceInfo: { ipAddress: string; userAgent: string }) {
-    // Check if the specific device already exists
+  async requestAuthorization(
+    userId: string,
+    fingerprint: string,
+    deviceInfo: { ipAddress: string; userAgent: string },
+  ) {
     const existingDevice = await this.prisma.device.findUnique({
-      where: { userId_fingerprint: { userId, fingerprint } },
+      where: { fingerprint },
     });
 
     if (existingDevice) {
       return { requestId: existingDevice.id, status: existingDevice.status };
     }
 
-    // Business Logic: Enforce 1 Approved Device Per User limit
-    const approvedDevicesCount = await this.prisma.device.count({
+    // Enforce 1 approved device per user
+    const approvedCount = await this.prisma.device.count({
       where: { userId, status: DeviceStatus.APPROVED },
     });
 
-    if (approvedDevicesCount >= 1) {
-      throw new UnauthorizedException('Security limit reached: User already has an active approved device.');
+    if (approvedCount >= 1) {
+      throw new UnauthorizedException(
+        'Security limit reached: user already has an active approved device.',
+      );
     }
 
-    // Create new device request
     const device = await this.prisma.device.create({
       data: {
         userId,
         fingerprint,
-        deviceInfo: deviceInfo.userAgent || 'Unknown',
-        ipAddress: deviceInfo.ipAddress || 'Unknown',
+        // Store user-agent in the name field (best available column)
+        name: deviceInfo.userAgent?.substring(0, 100) || 'Unknown device',
         status: DeviceStatus.PENDING,
       },
     });
@@ -87,15 +96,11 @@ export class DevicesService {
       include: { user: true },
     });
 
-    if (!device) {
-      throw new NotFoundException('Device not found');
-    }
+    if (!device) throw new NotFoundException('Device not found');
 
-    // Generate 6-digit code and hash it
+    // 6-digit code stored as bcrypt hash in requestCode
     const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const salt = await bcrypt.genSalt(10);
-    const hashedCode = await bcrypt.hash(code, salt);
-    
+    const hashedCode = await bcrypt.hash(code, 10);
     const expiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
 
     await this.prisma.device.update({
@@ -103,13 +108,11 @@ export class DevicesService {
       data: {
         status: DeviceStatus.APPROVED,
         approvedById,
-        approvedAt: new Date(),
-        authCodeHash: hashedCode,
-        authCodeExpiry: expiry,
+        requestCode: hashedCode,
+        requestCodeExpiry: expiry,
       },
     });
 
-    // Send the raw code via email
     try {
       const transporter = this.getMailTransporter();
       await transporter.sendMail({
@@ -154,35 +157,35 @@ export class DevicesService {
       return { valid: false, message: 'Device not approved' };
     }
 
-    if (!device.authCodeHash) {
-      return { valid: false, message: 'Invalid authorization code' };
+    if (!device.requestCode) {
+      return { valid: false, message: 'No authorization code found' };
     }
 
-    // Compare the raw code input with the stored hash
-    const isCodeValid = await bcrypt.compare(code, device.authCodeHash);
-    if (!isCodeValid) {
-      return { valid: false, message: 'Invalid authorization code' };
-    }
-
-    if (device.authCodeExpiry && device.authCodeExpiry < new Date()) {
+    if (
+      device.requestCodeExpiry &&
+      device.requestCodeExpiry < new Date()
+    ) {
       return { valid: false, message: 'Authorization code has expired' };
     }
 
-    // Clear the code after successful use (single-use)
+    const isValid = await bcrypt.compare(code, device.requestCode);
+    if (!isValid) {
+      return { valid: false, message: 'Invalid authorization code' };
+    }
+
+    // Clear code after single use
     await this.prisma.device.update({
       where: { id: requestId },
-      data: { authCodeHash: null, authCodeExpiry: null },
+      data: { requestCode: null, requestCodeExpiry: null },
     });
 
     return { valid: true, userId: device.userId };
   }
 
   async updateLastUsed(fingerprint: string) {
-    // Changed to findFirst since fingerprint alone is no longer globally unique
-    const device = await this.prisma.device.findFirst({
+    const device = await this.prisma.device.findUnique({
       where: { fingerprint },
     });
-    
     if (device) {
       await this.prisma.device.update({
         where: { id: device.id },
@@ -222,20 +225,17 @@ export class DevicesService {
             role: true,
           },
         },
-        approvedBy: {
-          select: { firstName: true, lastName: true },
-        },
+        approvedBy: { select: { firstName: true, lastName: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async revokeDevice(deviceId: string) {
-    const device = await this.prisma.device.findUnique({ where: { id: deviceId } });
-    if (!device) {
-      throw new NotFoundException('Device not found');
-    }
-
+    const device = await this.prisma.device.findUnique({
+      where: { id: deviceId },
+    });
+    if (!device) throw new NotFoundException('Device not found');
     return this.prisma.device.update({
       where: { id: deviceId },
       data: { status: DeviceStatus.REVOKED },
