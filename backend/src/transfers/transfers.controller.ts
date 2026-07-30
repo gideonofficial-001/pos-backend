@@ -1,44 +1,91 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, UseGuards, Request } from '@nestjs/common';
-import { TransferService } from './transfer.service';
-import { CreateTransferDto, RespondToTransferDto, TransferFilterDto } from './dto/transfer.dto';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { TransfersService } from './transfers.service';
+import { CreateTransferDto } from './dto/create-transfer.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { GetUser } from '../auth/decorators/get-user.decorator';
 import { UserRole } from '@prisma/client';
 
-@Controller('inventory/transfers')
+@ApiTags('Transfers')
+@Controller('transfers')
 @UseGuards(JwtAuthGuard, RolesGuard)
-export class TransferController {
-  constructor(private transferService: TransferService) {}
+@ApiBearerAuth()
+export class TransfersController {
+  constructor(private transfersService: TransfersService) {}
 
   @Post()
-  @Roles(UserRole.BRANCH_MANAGER, UserRole.SUPER_ADMIN)
-  async createTransfer(@Body() dto: CreateTransferDto, @Request() req) {
-    return this.transferService.createTransfer(req.user.userId, dto);
+  @Roles(UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Create transfer request' })
+  async create(@Body() data: CreateTransferDto, @GetUser() user: any) {
+    return this.transfersService.create(data, user);
   }
 
   @Get()
-  async getTransfers(@Query() filters: TransferFilterDto, @Request() req) {
-    return this.transferService.getTransfers(req.user.userId, filters);
+  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Get all transfers' })
+  async findAll(
+    @Query('fromBranchId') fromBranchId?: string,
+    @Query('toBranchId') toBranchId?: string,
+    @Query('status') status?: string,
+    @GetUser() user?: any,
+  ) {
+    return this.transfersService.findAll({ fromBranchId, toBranchId, status, user });
   }
 
   @Get(':id')
-  async getTransfer(@Param('id') id: string, @Request() req) {
-    return this.transferService.getTransferById(id, req.user.userId);
+  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Get transfer by ID' })
+  async findOne(@Param('id') id: string) {
+    return this.transfersService.findOne(id);
   }
 
-  @Post(':id/respond')
-  @Roles(UserRole.BRANCH_MANAGER, UserRole.SUPER_ADMIN)
-  async respondToTransfer(
-    @Param('id') transferId: string,
-    @Body() dto: RespondToTransferDto,
-    @Request() req,
+  @Patch(':id/approve')
+  @Roles(UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Approve all remaining pending items on a transfer' })
+  async approve(@Param('id') id: string, @GetUser() user: any) {
+    return this.transfersService.approve(id, user);
+  }
+
+  @Patch(':id/reject')
+  @Roles(UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Reject all remaining pending items on a transfer' })
+  async reject(
+    @Param('id') id: string,
+    @Body('rejectionReason') rejectionReason: string,
+    @GetUser() user: any,
   ) {
-    return this.transferService.respondToTransfer(transferId, req.user.userId, dto);
+    return this.transfersService.reject(id, user, rejectionReason);
   }
 
-  @Post(':id/cancel')
-  async cancelTransfer(@Param('id') transferId: string, @Request() req) {
-    return this.transferService.cancelTransfer(transferId, req.user.userId);
+  @Patch(':id/items/:itemId/approve')
+  @Roles(UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Approve a single item on a transfer' })
+  async approveItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @GetUser() user: any,
+  ) {
+    return this.transfersService.approveItem(id, itemId, user);
+  }
+
+  @Patch(':id/items/:itemId/reject')
+  @Roles(UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Reject a single item on a transfer' })
+  async rejectItem(
+    @Param('id') id: string,
+    @Param('itemId') itemId: string,
+    @Body('rejectionReason') rejectionReason: string,
+    @GetUser() user: any,
+  ) {
+    return this.transfersService.rejectItem(id, itemId, user, rejectionReason);
+  }
+
+  @Patch(':id/cancel')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Cancel a pending transfer request (initiator only)' })
+  async cancel(@Param('id') id: string, @GetUser() user: any) {
+    return this.transfersService.cancel(id, user);
   }
 }
