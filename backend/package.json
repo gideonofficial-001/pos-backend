@@ -26,7 +26,7 @@
     "postinstall": "prisma generate"
   },
   "prisma": {
-    "seed": "npx ts-node prisma/seed.ts"
+    "seed": "ts-node prisma/seed.ts"
   },
   "dependencies": {
     "@nestjs/cli": "^10.3.0",
