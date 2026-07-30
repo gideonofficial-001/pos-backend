@@ -9,17 +9,14 @@ export class ActivityFeedService {
   async findAll(user?: any) {
     const where: any = {};
 
-    if (user) {
-      if (user.role === UserRole.BRANCH_MANAGER) {
-        where.OR = [
-          { visibleToBranch: true, branchId: user.branchId },
-          { visibleToAdmin: true },
-        ];
-      } else if (user.role === UserRole.OVERALL_MANAGER) {
-        where.visibleToManager = true;
-      }
-      // SUPER_ADMIN sees everything
+    if (user?.role === UserRole.BRANCH_MANAGER) {
+      // Branch managers only see activity from their own branch
+      where.AND = [
+        { visibleToBranch: true },
+        { branchId: user.branchId },
+      ];
     }
+    // SUPER_ADMIN and OVERALL_MANAGER see everything — no filter
 
     return this.prisma.activityFeed.findMany({
       where,
@@ -28,13 +25,13 @@ export class ActivityFeedService {
     });
   }
 
-  async getRecent(limit: number = 10, user?: any) {
+  async getRecent(limit = 10, user?: any) {
     const where: any = {};
 
     if (user?.role === UserRole.BRANCH_MANAGER) {
-      where.OR = [
-        { visibleToBranch: true, branchId: user.branchId },
-        { visibleToAdmin: true },
+      where.AND = [
+        { visibleToBranch: true },
+        { branchId: user.branchId },
       ];
     }
 
