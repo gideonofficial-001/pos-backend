@@ -16,12 +16,18 @@ export class BranchesService {
       where: { code: createBranchDto.code },
     });
     if (existing) {
-      throw new ConflictException(`Branch with code ${createBranchDto.code} already exists`);
+      throw new ConflictException(
+        `Branch with code ${createBranchDto.code} already exists`,
+      );
     }
 
     const branch = await this.prisma.branch.create({
       data: createBranchDto,
-      include: { manager: { select: { id: true, firstName: true, lastName: true, email: true } } },
+      include: {
+        manager: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
     });
 
     await this.auditLogsService.create({
@@ -39,7 +45,9 @@ export class BranchesService {
   async findAll() {
     return this.prisma.branch.findMany({
       include: {
-        manager: { select: { id: true, firstName: true, lastName: true, email: true } },
+        manager: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
         _count: { select: { users: true, inventory: true, sales: true } },
       },
       orderBy: { createdAt: 'desc' },
@@ -50,32 +58,38 @@ export class BranchesService {
     const branch = await this.prisma.branch.findUnique({
       where: { id },
       include: {
-        manager: { select: { id: true, firstName: true, lastName: true, email: true } },
-        users: { select: { id: true, firstName: true, lastName: true, email: true, role: true } },
-        inventory: {
-          include: { product: true },
+        manager: {
+          select: { id: true, firstName: true, lastName: true, email: true },
         },
+        users: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            role: true,
+          },
+        },
+        inventory: { include: { product: true } },
         _count: { select: { sales: true } },
       },
     });
-
-    if (!branch) {
-      throw new NotFoundException('Branch not found');
-    }
-
+    if (!branch) throw new NotFoundException('Branch not found');
     return branch;
   }
 
   async update(id: string, updateBranchDto: UpdateBranchDto, performedBy: string) {
     const branch = await this.prisma.branch.findUnique({ where: { id } });
-    if (!branch) {
-      throw new NotFoundException('Branch not found');
-    }
+    if (!branch) throw new NotFoundException('Branch not found');
 
     const updated = await this.prisma.branch.update({
       where: { id },
       data: updateBranchDto,
-      include: { manager: { select: { id: true, firstName: true, lastName: true, email: true } } },
+      include: {
+        manager: {
+          select: { id: true, firstName: true, lastName: true, email: true },
+        },
+      },
     });
 
     await this.auditLogsService.create({
@@ -93,23 +107,16 @@ export class BranchesService {
 
   async toggleStatus(id: string, performedBy: string) {
     const branch = await this.prisma.branch.findUnique({ where: { id } });
-    if (!branch) {
-      throw new NotFoundException('Branch not found');
-    }
-
-    const updated = await this.prisma.branch.update({
+    if (!branch) throw new NotFoundException('Branch not found');
+    return this.prisma.branch.update({
       where: { id },
       data: { isActive: !branch.isActive },
     });
-
-    return updated;
   }
 
   async getBranchInventory(id: string) {
     const branch = await this.prisma.branch.findUnique({ where: { id } });
-    if (!branch) {
-      throw new NotFoundException('Branch not found');
-    }
+    if (!branch) throw new NotFoundException('Branch not found');
 
     return this.prisma.inventory.findMany({
       where: { branchId: id },
@@ -120,9 +127,7 @@ export class BranchesService {
 
   async getBranchSales(id: string, startDate?: string, endDate?: string) {
     const branch = await this.prisma.branch.findUnique({ where: { id } });
-    if (!branch) {
-      throw new NotFoundException('Branch not found');
-    }
+    if (!branch) throw new NotFoundException('Branch not found');
 
     const where: any = { branchId: id };
     if (startDate && endDate) {
@@ -132,7 +137,7 @@ export class BranchesService {
     return this.prisma.sale.findMany({
       where,
       include: {
-        items: { include: { product: true } },
+        saleItems: { include: { product: true } },
         user: { select: { firstName: true, lastName: true } },
       },
       orderBy: { createdAt: 'desc' },
