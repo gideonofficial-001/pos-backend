@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { UserRole, UserStatus } from '@prisma/client';
@@ -73,7 +78,8 @@ export class UsersService {
         branch: true,
         managedBranch: true,
         devices: {
-          select: { id: true, deviceInfo: true, status: true, lastUsedAt: true, createdAt: true },
+          // deviceInfo does not exist on the Device model — removed
+          select: { id: true, fingerprint: true, name: true, status: true, lastUsedAt: true, createdAt: true },
         },
         _count: { select: { sales: true } },
       },
@@ -136,24 +142,14 @@ export class UsersService {
       throw new BadRequestException('Cannot delete super admin user');
     }
 
-    // Require confirmation text to prevent accidental deletion
     const expectedText = `delete user ${user.email}`;
     if (confirmationText !== expectedText) {
       throw new BadRequestException(`Please type "delete user ${user.email}" to confirm deletion`);
     }
 
-    // Use transaction to handle related records
     await this.prisma.$transaction(async (tx) => {
-      // Clear manager reference from branch
-      await tx.branch.updateMany({
-        where: { managerId: id },
-        data: { managerId: null },
-      });
-
-      // Delete user's devices
+      await tx.branch.updateMany({ where: { managerId: id }, data: { managerId: null } });
       await tx.device.deleteMany({ where: { userId: id } });
-
-      // Delete user
       await tx.user.delete({ where: { id } });
     });
 
@@ -200,10 +196,7 @@ export class UsersService {
       this.prisma.user.count(),
       this.prisma.user.count({ where: { status: UserStatus.ACTIVE } }),
       this.prisma.user.count({ where: { status: UserStatus.INACTIVE } }),
-      this.prisma.user.groupBy({
-        by: ['role'],
-        _count: { role: true },
-      }),
+      this.prisma.user.groupBy({ by: ['role'], _count: { role: true } }),
     ]);
 
     return { total, active, inactive, byRole };
