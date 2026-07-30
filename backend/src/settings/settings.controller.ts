@@ -4,7 +4,6 @@ import { SettingsService } from './settings.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
-import { GetUser } from '../auth/decorators/get-user.decorator';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('Settings')
@@ -21,7 +20,7 @@ export class SettingsController {
   }
 
   @Get('public')
-  @ApiOperation({ summary: 'Get public settings (no auth required)' })
+  @ApiOperation({ summary: 'Get public settings' })
   async getPublicSettings() {
     return this.settingsService.getPublicSettings();
   }
@@ -39,10 +38,8 @@ export class SettingsController {
     @Body('key') key: string,
     @Body('value') value: string,
     @Body('description') description?: string,
-    @Body('isPublic') isPublic?: boolean,
-    @GetUser('userId') userId?: string,
   ) {
-    return this.settingsService.upsert(key, value, description, isPublic, userId);
+    return this.settingsService.upsert(key, value, description);
   }
 
   @Delete(':key')
