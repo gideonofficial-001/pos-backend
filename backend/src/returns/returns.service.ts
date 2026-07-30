@@ -16,7 +16,7 @@ export class ReturnsService {
 
     const sale = await this.prisma.sale.findUnique({
       where: { id: saleId },
-      include: { items: { include: { product: true } }, branch: true },
+      include: { saleItems: { include: { product: true } }, branch: true },
     });
 
     if (!sale) {
@@ -39,13 +39,14 @@ export class ReturnsService {
       data: {
         returnCode,
         saleId,
+        branchId: sale.branchId, // Added missing required field
         userId: user.userId,
         reason,
-        amount: amount || sale.total,
+        refundAmount: amount || sale.total, // Changed 'amount' to 'refundAmount'
         status: ReturnStatus.PENDING,
       },
       include: {
-        sale: { include: { items: { include: { product: true } } } },
+        sale: { include: { saleItems: { include: { product: true } } } }, // Fixed relation name
         user: { select: { firstName: true, lastName: true } },
       },
     });
@@ -60,17 +61,15 @@ export class ReturnsService {
       entityType: 'Return',
     });
 
-    // Create activity feed
+    // Create activity feed (Cleaned up missing fields to prevent runtime crash)
     await this.prisma.activityFeed.create({
       data: {
-        actorId: user.userId,
-        actorName: `${user.firstName} ${user.lastName}`,
+        type: 'RETURN_REQUEST',
         branchId: sale.branchId,
         title: 'Return Requested',
-        message: `Return ${returnCode} for sale ${sale.saleCode}`,
+        message: `Return ${returnCode} for sale ${sale.saleCode} requested by ${user.firstName}`,
         entityId: returnRequest.id,
         entityType: 'Return',
-        visibleToAdmin: true,
         visibleToBranch: true,
       },
     });
@@ -94,7 +93,7 @@ export class ReturnsService {
       include: {
         sale: {
           include: {
-            items: { include: { product: true } },
+            saleItems: { include: { product: true } }, // Fixed relation name
             branch: { select: { id: true, name: true, code: true } },
           },
         },
@@ -109,7 +108,7 @@ export class ReturnsService {
     const returnRequest = await this.prisma.return.findUnique({
       where: { id },
       include: {
-        sale: { include: { items: { include: { product: true } } } },
+        sale: { include: { saleItems: { include: { product: true } } } }, // Fixed relation name
         user: { select: { firstName: true, lastName: true } },
         approvedBy: { select: { firstName: true, lastName: true } },
       },
@@ -125,7 +124,7 @@ export class ReturnsService {
   async approve(id: string, approvedById: string) {
     const returnRequest = await this.prisma.return.findUnique({
       where: { id },
-      include: { sale: { include: { items: true } } },
+      include: { sale: { include: { saleItems: true } } }, // Fixed relation name
     });
 
     if (!returnRequest) {
@@ -145,12 +144,12 @@ export class ReturnsService {
           status: ReturnStatus.APPROVED,
           approvedById,
           approvedAt: new Date(),
-          stockReversed: true,
+          // Removed non-existent stockReversed field
         },
       });
 
       // Restore inventory
-      for (const item of returnRequest.sale.items) {
+      for (const item of returnRequest.sale.saleItems) { // Iterating over correct relation
         const inventory = await tx.inventory.findUnique({
           where: { branchId_productId: { branchId: returnRequest.sale.branchId, productId: item.productId } },
         });
@@ -163,16 +162,12 @@ export class ReturnsService {
             },
           });
 
-          // Create stock movement
+          // Create stock movement (Fixed fields to match updated schema)
           await tx.stockMovement.create({
             data: {
               inventoryId: inventory.id,
-              productId: item.productId,
-              branchId: returnRequest.sale.branchId,
-              quantityBefore: inventory.quantity,
-              quantityChanged: item.quantity,
-              quantityAfter: inventory.quantity + item.quantity,
-              movementType: MovementType.RETURN,
+              type: MovementType.RETURN,
+              quantity: item.quantity,
               referenceId: id,
               referenceType: 'Return',
               performedById: approvedById,
