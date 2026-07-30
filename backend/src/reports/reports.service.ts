@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { UserRole, SaleStatus, ProductType } from '@prisma/client';
+import { UserRole, SaleStatus } from '@prisma/client';
 
 @Injectable()
 export class ReportsService {
@@ -15,10 +15,23 @@ export class ReportsService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const [totalSales, todaySales, totalRevenue, totalBranches, totalProducts, totalUsers, lowStock, pendingInvoices, recentSales] = await Promise.all([
+    const [
+      totalSales,
+      todaySales,
+      totalRevenue,
+      totalBranches,
+      totalProducts,
+      totalUsers,
+      lowStock,
+      pendingInvoices,
+      recentSales,
+    ] = await Promise.all([
       this.prisma.sale.count({ where }),
       this.prisma.sale.count({ where: { ...where, createdAt: { gte: today } } }),
-      this.prisma.sale.aggregate({ where: { ...where, status: SaleStatus.COMPLETED }, _sum: { total: true } }),
+      this.prisma.sale.aggregate({
+        where: { ...where, status: SaleStatus.COMPLETED },
+        _sum: { total: true },
+      }),
       this.prisma.branch.count(),
       this.prisma.product.count({ where: { isActive: true } }),
       this.prisma.user.count(),
@@ -29,7 +42,7 @@ export class ReportsService {
         take: 10,
         orderBy: { createdAt: 'desc' },
         include: {
-          items: { include: { product: true } },
+          saleItems: { include: { product: true } },
           branch: { select: { name: true } },
           user: { select: { firstName: true, lastName: true } },
         },
@@ -49,7 +62,7 @@ export class ReportsService {
     };
   }
 
-  async getSalesTrend(days: number = 30, user?: any) {
+  async getSalesTrend(days = 30, user?: any) {
     const where: any = { status: SaleStatus.COMPLETED };
     if (user?.role === UserRole.BRANCH_MANAGER) {
       where.branchId = user.branchId;
@@ -65,8 +78,7 @@ export class ReportsService {
       orderBy: { createdAt: 'asc' },
     });
 
-    // Group by date
-    const grouped = {};
+    const grouped: Record<string, any> = {};
     sales.forEach((sale) => {
       const date = sale.createdAt.toISOString().split('T')[0];
       if (!grouped[date]) {
@@ -107,9 +119,7 @@ export class ReportsService {
     const products = await this.prisma.product.findMany({
       where: { isActive: true },
       include: {
-        saleItems: {
-          select: { quantity: true, total: true },
-        },
+        saleItems: { select: { quantity: true, total: true } },
         inventory: true,
       },
     });
@@ -121,7 +131,10 @@ export class ReportsService {
       type: product.type,
       price: product.price,
       totalSold: product.saleItems.reduce((sum, item) => sum + item.quantity, 0),
-      totalRevenue: product.saleItems.reduce((sum, item) => sum + Number(item.total), 0),
+      totalRevenue: product.saleItems.reduce(
+        (sum, item) => sum + Number(item.total),
+        0,
+      ),
       currentStock: product.inventory.reduce((sum, inv) => sum + inv.quantity, 0),
     }));
   }
@@ -148,7 +161,11 @@ export class ReportsService {
       _count: { category: true },
     });
 
-    return { expenses, byCategory, total: expenses.reduce((sum, e) => sum + Number(e.amount), 0) };
+    return {
+      expenses,
+      byCategory,
+      total: expenses.reduce((sum, e) => sum + Number(e.amount), 0),
+    };
   }
 
   async getInventoryValuation() {
@@ -160,7 +177,6 @@ export class ReportsService {
       (sum, item) => sum + item.quantity * Number(item.product.price),
       0,
     );
-
     const totalCost = inventory.reduce(
       (sum, item) => sum + item.quantity * Number(item.product.costPrice || 0),
       0,
