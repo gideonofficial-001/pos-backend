@@ -14,7 +14,6 @@ export class ExpensesService {
   async create(createExpenseDto: CreateExpenseDto, user: any) {
     const { branchId, amount, category, description, receiptUrl } = createExpenseDto;
 
-    // Generate expense code
     const count = await this.prisma.expense.count();
     const expenseCode = `EXP-${String(count + 1).padStart(5, '0')}`;
 
@@ -35,7 +34,6 @@ export class ExpensesService {
       },
     });
 
-    // Notify admin
     await this.notificationsService.create({
       type: 'EXPENSE_SUBMITTED',
       title: 'New Expense Submitted',
@@ -45,18 +43,14 @@ export class ExpensesService {
       entityType: 'Expense',
     });
 
-    // Create activity feed
     await this.prisma.activityFeed.create({
       data: {
-        actorId: user.userId,
-        actorName: `${user.firstName} ${user.lastName}`,
+        type: 'EXPENSE_SUBMITTED',
         branchId,
-        branchName: expense.branch.name,
         title: 'Expense Submitted',
         message: `Expense ${expenseCode} - KES ${Number(amount).toFixed(2)}: ${description}`,
         entityId: expense.id,
         entityType: 'Expense',
-        visibleToAdmin: true,
         visibleToBranch: true,
       },
     });
@@ -66,13 +60,8 @@ export class ExpensesService {
 
   async findAll(query?: { branchId?: string; status?: string; user?: any }) {
     const where: any = {};
-
-    if (query?.branchId) {
-      where.branchId = query.branchId;
-    }
-    if (query?.status) {
-      where.status = query.status;
-    }
+    if (query?.branchId) where.branchId = query.branchId;
+    if (query?.status) where.status = query.status;
 
     return this.prisma.expense.findMany({
       where,
@@ -94,38 +83,23 @@ export class ExpensesService {
         approvedBy: { select: { firstName: true, lastName: true } },
       },
     });
-
-    if (!expense) {
-      throw new NotFoundException('Expense not found');
-    }
-
+    if (!expense) throw new NotFoundException('Expense not found');
     return expense;
   }
 
   async approve(id: string, approvedById: string) {
     const expense = await this.prisma.expense.findUnique({ where: { id } });
-    if (!expense) {
-      throw new NotFoundException('Expense not found');
-    }
-
+    if (!expense) throw new NotFoundException('Expense not found');
     if (expense.status !== ExpenseStatus.PENDING) {
       throw new BadRequestException('Expense is not pending');
     }
 
     const updated = await this.prisma.expense.update({
       where: { id },
-      data: {
-        status: ExpenseStatus.APPROVED,
-        approvedById,
-        approvedAt: new Date(),
-      },
-      include: {
-        branch: true,
-        user: { select: { firstName: true, lastName: true } },
-      },
+      data: { status: ExpenseStatus.APPROVED, approvedById, approvedAt: new Date() },
+      include: { branch: true, user: { select: { firstName: true, lastName: true } } },
     });
 
-    // Notify submitter
     await this.notificationsService.create({
       type: 'EXPENSE_APPROVED',
       title: 'Expense Approved',
@@ -140,25 +114,16 @@ export class ExpensesService {
 
   async reject(id: string, approvedById: string, rejectionReason: string) {
     const expense = await this.prisma.expense.findUnique({ where: { id } });
-    if (!expense) {
-      throw new NotFoundException('Expense not found');
-    }
-
+    if (!expense) throw new NotFoundException('Expense not found');
     if (expense.status !== ExpenseStatus.PENDING) {
       throw new BadRequestException('Expense is not pending');
     }
 
     const updated = await this.prisma.expense.update({
       where: { id },
-      data: {
-        status: ExpenseStatus.REJECTED,
-        approvedById,
-        approvedAt: new Date(),
-        rejectionReason,
-      },
+      data: { status: ExpenseStatus.REJECTED, approvedById, approvedAt: new Date(), rejectionReason },
     });
 
-    // Notify submitter
     await this.notificationsService.create({
       type: 'EXPENSE_REJECTED',
       title: 'Expense Rejected',
