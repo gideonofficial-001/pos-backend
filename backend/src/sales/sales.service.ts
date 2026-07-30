@@ -130,9 +130,16 @@ export class SalesService {
     const sale = await this.prisma.$transaction(async (tx) => {
       const newSale = await tx.sale.create({
         data: {
-          saleCode, branchId, userId: user.userId, customerId, type,
-          status: SaleStatus.COMPLETED, customerName, customerPhone,
-          subtotal, tax: 0, discount: finalDiscount, total, saleDate, notes,
+          saleCode, 
+          branchId, 
+          userId: user.userId, 
+          customerId, 
+          type,
+          status: SaleStatus.COMPLETED, 
+          subtotal, 
+          discount: finalDiscount, 
+          total, 
+          notes,
           saleItems: { create: saleItems },
         },
         include: {
