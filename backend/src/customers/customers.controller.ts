@@ -16,21 +16,24 @@ export class CustomersController {
   @Post()
   @Roles(UserRole.SUPER_ADMIN)
   @ApiOperation({ summary: 'Create new customer (Admin only)' })
-  async create(@Body() data: { fullName: string; phone: string; email?: string; businessName?: string; address?: string; creditLimit?: number }) {
+  async create(
+    @Body() data: {
+      name: string;
+      phone: string;
+      email?: string;
+      address?: string;
+      notes?: string;
+      creditLimit?: number;
+    },
+  ) {
     return this.customersService.create(data);
   }
 
   @Get()
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
   @ApiOperation({ summary: 'Get all customers' })
-  async findAll(
-    @Query('search') search?: string,
-    @Query('isInvoiceEligible') isInvoiceEligible?: string,
-  ) {
-    return this.customersService.findAll({
-      search,
-      isInvoiceEligible: isInvoiceEligible !== undefined ? isInvoiceEligible === 'true' : undefined,
-    });
+  async findAll(@Query('search') search?: string) {
+    return this.customersService.findAll({ search });
   }
 
   @Get('outstanding-balances')
