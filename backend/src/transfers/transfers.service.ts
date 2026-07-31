@@ -35,17 +35,12 @@ export class TransfersService {
   async create(data: CreateTransferDto, user: AuthUser) {
     const { fromBranchId, toBranchId, items, notes } = data;
 
-    if (!items || items.length === 0) {
-      throw new BadRequestException('At least one product must be included in the transfer');
-    }
-
-    if (fromBranchId === toBranchId) {
+    if (!items || items.length === 0)
+      throw new BadRequestException('At least one product must be included');
+    if (fromBranchId === toBranchId)
       throw new BadRequestException('Source and destination branches cannot be the same');
-    }
-
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== fromBranchId) {
+    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== fromBranchId)
       throw new ForbiddenException('You can only transfer from your assigned branch');
-    }
 
     const [sourceBranch, destBranch] = await Promise.all([
       this.prisma.branch.findUnique({ where: { id: fromBranchId } }),
@@ -54,18 +49,16 @@ export class TransfersService {
 
     if (!sourceBranch) throw new NotFoundException('Source branch not found');
     if (!destBranch) throw new NotFoundException('Destination branch not found');
-    if (!destBranch.isActive) {
+    if (!destBranch.isActive)
       throw new BadRequestException(`${destBranch.name} is inactive and cannot receive transfers`);
-    }
 
     for (const item of items) {
-      if (!item.quantity || item.quantity <= 0) {
+      if (!item.quantity || item.quantity <= 0)
         throw new BadRequestException('Quantity must be greater than 0 for every item');
-      }
     }
 
-    // Validate stock and build item records
-    const transferItems: { productId: string; inventoryId: string; quantity: number }[] = [];
+    // Validate stock. inventoryId kept locally for stock ops — never passed to TransferItem.create
+    const transferItems: { productId: string; quantity: number }[] = [];
 
     for (const item of items) {
       const inventory = await this.prisma.inventory.findUnique({
@@ -73,21 +66,13 @@ export class TransfersService {
         include: { product: true },
       });
 
-      if (!inventory) {
-        throw new BadRequestException('Product not found in source branch');
-      }
-
-      if (inventory.quantity < item.quantity) {
+      if (!inventory) throw new BadRequestException('Product not found in source branch');
+      if (inventory.quantity < item.quantity)
         throw new BadRequestException(
           `Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}, Requested: ${item.quantity}`,
         );
-      }
 
-      transferItems.push({
-        productId: item.productId,
-        inventoryId: inventory.id,
-        quantity: item.quantity,
-      });
+      transferItems.push({ productId: item.productId, quantity: item.quantity });
     }
 
     const count = await this.prisma.transfer.count();
@@ -111,7 +96,6 @@ export class TransfersService {
       },
     });
 
-    // Notify only the receiving branch manager
     if (destBranch.managerId) {
       await this.notificationsService.create({
         type: 'TRANSFER_REQUEST',
@@ -123,7 +107,6 @@ export class TransfersService {
       });
     }
 
-    // Activity feed
     await this.prisma.activityFeed.create({
       data: {
         type: 'TRANSFER_CREATED',
@@ -141,7 +124,6 @@ export class TransfersService {
 
   async findAll(query?: { fromBranchId?: string; toBranchId?: string; status?: string; user?: any }) {
     const where: any = {};
-
     if (query?.fromBranchId) where.fromBranchId = query.fromBranchId;
     if (query?.toBranchId) where.toBranchId = query.toBranchId;
     if (query?.status) where.status = query.status;
@@ -168,7 +150,6 @@ export class TransfersService {
         items: { include: { product: true } },
       },
     });
-
     if (!transfer) throw new NotFoundException('Transfer not found');
     return transfer;
   }
@@ -179,15 +160,13 @@ export class TransfersService {
     });
 
     if (sourceInventory) {
-      if (sourceInventory.quantity < item.quantity) {
+      if (sourceInventory.quantity < item.quantity)
         throw new BadRequestException('Insufficient stock remaining at the source branch');
-      }
 
       await tx.inventory.update({
         where: { id: sourceInventory.id },
         data: { quantity: { decrement: item.quantity } },
       });
-
       await tx.stockMovement.create({
         data: {
           inventoryId: sourceInventory.id,
@@ -210,7 +189,6 @@ export class TransfersService {
         where: { id: destInventory.id },
         data: { quantity: { increment: item.quantity } },
       });
-
       await tx.stockMovement.create({
         data: {
           inventoryId: destInventory.id,
@@ -224,41 +202,29 @@ export class TransfersService {
       });
     } else {
       await tx.inventory.create({
-        data: {
-          branchId: transfer.toBranchId,
-          productId: item.productId,
-          quantity: item.quantity,
-        },
+        data: { branchId: transfer.toBranchId, productId: item.productId, quantity: item.quantity },
       });
     }
   }
 
   private async recomputeTransferStatus(transferId: string): Promise<TransferStatus> {
     const items = await this.prisma.transferItem.findMany({ where: { transferId } });
-
-    const allPending = items.every((i) => i.status === TransferItemStatus.PENDING);
     const allResolved = items.every((i) => i.status !== TransferItemStatus.PENDING);
     const anyResolved = items.some((i) => i.status !== TransferItemStatus.PENDING);
 
-    let status: TransferStatus;
-    if (allPending) {
-      status = TransferStatus.PENDING;
-    } else if (allResolved) {
-      status = TransferStatus.COMPLETED;
-    } else if (anyResolved) {
-      status = TransferStatus.PARTIAL;
-    } else {
-      status = TransferStatus.PENDING;
-    }
+    const status: TransferStatus = allResolved
+      ? TransferStatus.COMPLETED
+      : anyResolved
+      ? TransferStatus.PARTIAL
+      : TransferStatus.PENDING;
 
     await this.prisma.transfer.update({ where: { id: transferId }, data: { status } });
     return status;
   }
 
   private assertIsReceivingManager(transfer: { toBranchId: string }, user: AuthUser) {
-    if (user.role !== UserRole.BRANCH_MANAGER || user.branchId !== transfer.toBranchId) {
+    if (user.role !== UserRole.BRANCH_MANAGER || user.branchId !== transfer.toBranchId)
       throw new ForbiddenException('Only the receiving branch manager can act on this transfer');
-    }
   }
 
   async approveItem(transferId: string, itemId: string, user: AuthUser) {
@@ -267,26 +233,20 @@ export class TransfersService {
       include: { items: { include: { product: true } } },
     });
     if (!transfer) throw new NotFoundException('Transfer not found');
-
     this.assertIsReceivingManager(transfer, user);
 
     const item = transfer.items.find((i) => i.id === itemId);
     if (!item) throw new NotFoundException('Transfer item not found');
-    if (item.status !== TransferItemStatus.PENDING) {
+    if (item.status !== TransferItemStatus.PENDING)
       throw new BadRequestException(`This item has already been ${item.status.toLowerCase()}`);
-    }
 
     await this.prisma.$transaction(async (tx) => {
       await this.applyItemStockMovement(tx, transfer, item, user.userId);
-      await tx.transferItem.update({
-        where: { id: itemId },
-        data: { status: TransferItemStatus.ACCEPTED },
-      });
+      await tx.transferItem.update({ where: { id: itemId }, data: { status: TransferItemStatus.ACCEPTED } });
     });
 
     await this.recomputeTransferStatus(transferId);
 
-    // Notify only the sending branch manager
     const fromBranch = await this.prisma.branch.findUnique({ where: { id: transfer.fromBranchId } });
     if (fromBranch?.managerId) {
       await this.notificationsService.create({
@@ -303,32 +263,26 @@ export class TransfersService {
   }
 
   async rejectItem(transferId: string, itemId: string, user: AuthUser, rejectionReason: string) {
-    if (!rejectionReason?.trim()) {
-      throw new BadRequestException('A rejection reason is required');
-    }
+    if (!rejectionReason?.trim()) throw new BadRequestException('A rejection reason is required');
 
     const transfer = await this.prisma.transfer.findUnique({
       where: { id: transferId },
       include: { items: { include: { product: true } } },
     });
     if (!transfer) throw new NotFoundException('Transfer not found');
-
     this.assertIsReceivingManager(transfer, user);
 
     const item = transfer.items.find((i) => i.id === itemId);
     if (!item) throw new NotFoundException('Transfer item not found');
-    if (item.status !== TransferItemStatus.PENDING) {
+    if (item.status !== TransferItemStatus.PENDING)
       throw new BadRequestException(`This item has already been ${item.status.toLowerCase()}`);
-    }
 
     await this.prisma.transferItem.update({
       where: { id: itemId },
       data: { status: TransferItemStatus.REJECTED, notes: rejectionReason.trim() },
     });
-
     await this.recomputeTransferStatus(transferId);
 
-    // Notify only the sending branch manager
     const fromBranch = await this.prisma.branch.findUnique({ where: { id: transfer.fromBranchId } });
     if (fromBranch?.managerId) {
       await this.notificationsService.create({
@@ -350,21 +304,16 @@ export class TransfersService {
       include: { items: { include: { product: true } } },
     });
     if (!transfer) throw new NotFoundException('Transfer not found');
-
     this.assertIsReceivingManager(transfer, user);
 
     const pendingItems = transfer.items.filter((i) => i.status === TransferItemStatus.PENDING);
-    if (pendingItems.length === 0) {
+    if (pendingItems.length === 0)
       throw new BadRequestException('There are no pending items left to approve');
-    }
 
     await this.prisma.$transaction(async (tx) => {
       for (const item of pendingItems) {
         await this.applyItemStockMovement(tx, transfer, item, user.userId);
-        await tx.transferItem.update({
-          where: { id: item.id },
-          data: { status: TransferItemStatus.ACCEPTED },
-        });
+        await tx.transferItem.update({ where: { id: item.id }, data: { status: TransferItemStatus.ACCEPTED } });
       }
     });
 
@@ -386,28 +335,23 @@ export class TransfersService {
   }
 
   async reject(id: string, user: AuthUser, rejectionReason: string) {
-    if (!rejectionReason?.trim()) {
-      throw new BadRequestException('A rejection reason is required');
-    }
+    if (!rejectionReason?.trim()) throw new BadRequestException('A rejection reason is required');
 
     const transfer = await this.prisma.transfer.findUnique({
       where: { id },
       include: { items: { include: { product: true } } },
     });
     if (!transfer) throw new NotFoundException('Transfer not found');
-
     this.assertIsReceivingManager(transfer, user);
 
     const pendingItems = transfer.items.filter((i) => i.status === TransferItemStatus.PENDING);
-    if (pendingItems.length === 0) {
+    if (pendingItems.length === 0)
       throw new BadRequestException('There are no pending items left to reject');
-    }
 
     await this.prisma.transferItem.updateMany({
       where: { id: { in: pendingItems.map((i) => i.id) } },
       data: { status: TransferItemStatus.REJECTED, notes: rejectionReason.trim() },
     });
-
     await this.recomputeTransferStatus(id);
 
     const fromBranch = await this.prisma.branch.findUnique({ where: { id: transfer.fromBranchId } });
@@ -435,26 +379,14 @@ export class TransfersService {
     });
     if (!transfer) throw new NotFoundException('Transfer not found');
 
-    if (!transfer.items.every((i) => i.status === TransferItemStatus.PENDING)) {
-      throw new BadRequestException(
-        'This transfer already has items that were accepted or rejected and can no longer be cancelled',
-      );
-    }
-
-    if (transfer.status !== TransferStatus.PENDING) {
-      throw new BadRequestException(
-        `Transfer has already been ${transfer.status.toLowerCase()} and can no longer be cancelled`,
-      );
-    }
-
-    if (user.role === UserRole.BRANCH_MANAGER && transfer.requestedById !== user.userId) {
+    if (!transfer.items.every((i) => i.status === TransferItemStatus.PENDING))
+      throw new BadRequestException('This transfer already has accepted/rejected items and cannot be cancelled');
+    if (transfer.status !== TransferStatus.PENDING)
+      throw new BadRequestException(`Transfer is already ${transfer.status.toLowerCase()}`);
+    if (user.role === UserRole.BRANCH_MANAGER && transfer.requestedById !== user.userId)
       throw new ForbiddenException('Only the branch manager who created this transfer can cancel it');
-    }
 
-    await this.prisma.transfer.update({
-      where: { id },
-      data: { status: TransferStatus.CANCELLED },
-    });
+    await this.prisma.transfer.update({ where: { id }, data: { status: TransferStatus.CANCELLED } });
 
     if (transfer.toBranch?.managerId) {
       await this.notificationsService.create({
