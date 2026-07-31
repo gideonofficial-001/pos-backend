@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, IsOptional, IsNumber, IsDateString } from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, IsNumber, IsDateString, Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateInvoiceDto {
@@ -7,30 +7,29 @@ export class CreateInvoiceDto {
   @IsString()
   branchId: string;
 
+  // Required in Invoice schema (String, non-nullable)
+  @ApiProperty()
+  @IsNotEmpty({ message: 'Customer ID is required' })
+  @IsString()
+  customerId: string;
+
+  // Optional link to a sale that generated this invoice
   @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
-  customerId?: string;
+  saleId?: string;
 
   @ApiProperty()
-  @IsNotEmpty({ message: 'Customer name is required' })
-  @IsString()
-  customerName: string;
-
-  @ApiProperty()
-  @IsNotEmpty({ message: 'Customer phone is required' })
-  @IsString()
-  customerPhone: string;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  customerEmail?: string;
-
-  @ApiProperty()
-  @IsNotEmpty({ message: 'Amount is required' })
+  @IsNotEmpty({ message: 'Subtotal is required' })
   @IsNumber()
-  amount: number;
+  @Min(0)
+  subtotal: number;
+
+  @ApiProperty({ required: false, default: 0 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  discount?: number;
 
   @ApiProperty()
   @IsNotEmpty({ message: 'Due date is required' })
