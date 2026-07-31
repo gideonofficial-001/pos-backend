@@ -13,41 +13,22 @@ export class CustomersService {
     notes?: string;
     creditLimit?: number;
   }) {
-    const existing = await this.prisma.customer.findUnique({
-      where: { phone: data.phone },
-    });
-    if (existing) {
-      throw new ConflictException(
-        'Customer with this phone number already exists',
-      );
-    }
+    const existing = await this.prisma.customer.findUnique({ where: { phone: data.phone } });
+    if (existing) throw new ConflictException('Customer with this phone number already exists');
 
+    // email is not @unique on Customer — must use findFirst
     if (data.email) {
-      const existingEmail = await this.prisma.customer.findUnique({
-        where: { email: data.email },
-      });
-      if (existingEmail) {
-        throw new ConflictException(
-          'Customer with this email already exists',
-        );
-      }
+      const existingEmail = await this.prisma.customer.findFirst({ where: { email: data.email } });
+      if (existingEmail) throw new ConflictException('Customer with this email already exists');
     }
 
     return this.prisma.customer.create({
-      data: {
-        name: data.name,
-        phone: data.phone,
-        email: data.email,
-        address: data.address,
-        notes: data.notes,
-        creditLimit: data.creditLimit || 0,
-      },
+      data: { name: data.name, phone: data.phone, email: data.email, address: data.address, notes: data.notes, creditLimit: data.creditLimit || 0 },
     });
   }
 
   async findAll(query?: { search?: string }) {
     const where: any = {};
-
     if (query?.search) {
       where.OR = [
         { name: { contains: query.search, mode: 'insensitive' } },
@@ -55,7 +36,6 @@ export class CustomersService {
         { email: { contains: query.search, mode: 'insensitive' } },
       ];
     }
-
     return this.prisma.customer.findMany({
       where,
       include: { _count: { select: { invoices: true, sales: true } } },
@@ -68,11 +48,7 @@ export class CustomersService {
       where: { id },
       include: {
         invoices: { orderBy: { createdAt: 'desc' } },
-        sales: {
-          orderBy: { createdAt: 'desc' },
-          take: 20,
-          include: { saleItems: { include: { product: true } } },
-        },
+        sales: { orderBy: { createdAt: 'desc' }, take: 20, include: { saleItems: { include: { product: true } } } },
       },
     });
     if (!customer) throw new NotFoundException('Customer not found');
@@ -92,25 +68,14 @@ export class CustomersService {
   async toggleStatus(id: string) {
     const customer = await this.prisma.customer.findUnique({ where: { id } });
     if (!customer) throw new NotFoundException('Customer not found');
-    return this.prisma.customer.update({
-      where: { id },
-      data: { isActive: !customer.isActive },
-    });
+    return this.prisma.customer.update({ where: { id }, data: { isActive: !customer.isActive } });
   }
 
   async getOutstandingBalances() {
-    // creditUsed tracks outstanding debt in the actual schema
     return this.prisma.customer.findMany({
       where: { creditUsed: { gt: 0 } },
       orderBy: { creditUsed: 'desc' },
-      select: {
-        id: true,
-        name: true,
-        phone: true,
-        creditUsed: true,
-        creditLimit: true,
-      },
+      select: { id: true, name: true, phone: true, creditUsed: true, creditLimit: true },
     });
   }
 }
-1
