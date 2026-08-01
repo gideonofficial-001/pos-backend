@@ -4,8 +4,8 @@ services:
     env: node
     plan: starter
     region: oregon
-    buildCommand: cd backend && npm install --production=false && npx prisma generate && npm run build
-    startCommand: cd backend && npx prisma migrate deploy && npm run start:prod
+    buildCommand: cd backend && npm install --production=false && npx prisma generate && npx prisma db push && node prisma/seed.js && npm run build
+    startCommand: cd backend && npm run start:prod
     envVars:
       - key: NODE_ENV
         value: production
@@ -20,7 +20,7 @@ services:
       - key: JWT_EXPIRES_IN
         value: 24h
       - key: FRONTEND_URL
-        value: https://njugush-pos.vercel.app
+        value: https://njugush-ent.vercel.app
       - key: EMAIL_USER
         sync: false
       - key: EMAIL_PASS
@@ -35,7 +35,7 @@ services:
     staticPublishPath: ./frontend/dist
     envVars:
       - key: VITE_API_URL
-        value: https://njugush-pos-backend.onrender.com/api
+        value: https://pos-backend-dffl.onrender.com/api
     routes:
       - type: rewrite
         source: /.*
@@ -48,3 +48,4 @@ databases:
     databaseName: njugush_pos
     user: njugush_admin
     ipAllowList: []
+    
