@@ -32,9 +32,12 @@ export class NotificationsController {
   }
 
   @Get('pending-approvals')
-  @ApiOperation({ summary: 'Get pending approvals count' })
-  async getPendingApprovals() {
-    return this.notificationsService.getPendingApprovals();
+  @ApiOperation({ summary: 'Get pending approvals count (transfer count scoped to user branch)' })
+  async getPendingApprovals(@Request() req) {
+    return this.notificationsService.getPendingApprovals(
+      req.user.userId,
+      req.user.role,
+    );
   }
 
   @Post(':id/read')
