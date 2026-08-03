@@ -26,21 +26,6 @@ services:
       - key: EMAIL_PASS
         sync: false
 
-  - type: web
-    name: njugush-pos-frontend
-    env: static
-    plan: starter
-    region: oregon
-    buildCommand: cd frontend && npm install && npm run build
-    staticPublishPath: ./frontend/dist
-    envVars:
-      - key: VITE_API_URL
-        value: https://pos-backend-dffl.onrender.com/api
-    routes:
-      - type: rewrite
-        source: /.*
-        destination: /index.html
-
 databases:
   - name: njugush-pos-db
     plan: starter
@@ -48,4 +33,3 @@ databases:
     databaseName: njugush_pos
     user: njugush_admin
     ipAllowList: []
-    
