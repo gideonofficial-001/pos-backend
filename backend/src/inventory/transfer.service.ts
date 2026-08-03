@@ -178,7 +178,6 @@ export class TransferService {
         items: {
           include: {
             product: { select: { id: true, name: true } },
-            cylinder: { select: { id: true, serialNumber: true } },
           },
         },
       },
@@ -235,7 +234,6 @@ export class TransferService {
         items: {
           include: {
             product: { select: { id: true, name: true } },
-            cylinder: true,
           },
         },
         fromBranch: { select: { id: true, name: true } },
@@ -466,7 +464,6 @@ export class TransferService {
         items: {
           include: {
             product: { select: { id: true, name: true } },
-            cylinder: { select: { id: true, serialNumber: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
@@ -492,7 +489,6 @@ export class TransferService {
         items: {
           include: {
             product: { select: { id: true, name: true } },
-            cylinder: { select: { id: true, serialNumber: true, status: true } },
           },
           orderBy: { createdAt: 'asc' },
         },
