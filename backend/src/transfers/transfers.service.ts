@@ -57,7 +57,6 @@ export class TransfersService {
         throw new BadRequestException('Quantity must be greater than 0 for every item');
     }
 
-    // Validate stock. inventoryId kept locally for stock ops — never passed to TransferItem.create
     const transferItems: { productId: string; quantity: number }[] = [];
 
     for (const item of items) {
@@ -91,7 +90,7 @@ export class TransfersService {
       include: {
         fromBranch: { select: { id: true, name: true, code: true } },
         toBranch: { select: { id: true, name: true, code: true } },
-        requestedBy: { select: { firstName: true, lastName: true } },
+        requestedBy: { select: { id: true, firstName: true, lastName: true } },
         items: { include: { product: true } },
       },
     });
@@ -122,19 +121,36 @@ export class TransfersService {
     return transfer;
   }
 
-  async findAll(query?: { fromBranchId?: string; toBranchId?: string; status?: string; user?: any }) {
+  // Scoped by branch — each user only sees transfers involving their branch
+  async findAll(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { role: true, branchId: true },
+    });
+
+    if (!user) throw new NotFoundException('User not found');
+
     const where: any = {};
-    if (query?.fromBranchId) where.fromBranchId = query.fromBranchId;
-    if (query?.toBranchId) where.toBranchId = query.toBranchId;
-    if (query?.status) where.status = query.status;
+
+    // BRANCH_MANAGER and SUPER_ADMIN only see transfers involving their branch
+    if (user.branchId) {
+      where.OR = [
+        { fromBranchId: user.branchId },
+        { toBranchId: user.branchId },
+      ];
+    }
+    // OVERALL_MANAGER with no branch sees nothing — adjust if needed
 
     return this.prisma.transfer.findMany({
       where,
       include: {
-        fromBranch: { select: { id: true, name: true, code: true } },
-        toBranch: { select: { id: true, name: true, code: true } },
-        requestedBy: { select: { firstName: true, lastName: true } },
-        items: { include: { product: true } },
+        fromBranch: { select: { id: true, name: true } },
+        toBranch: { select: { id: true, name: true } },
+        requestedBy: { select: { id: true, firstName: true, lastName: true } },
+        items: {
+          include: { product: { select: { id: true, name: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -146,8 +162,11 @@ export class TransfersService {
       include: {
         fromBranch: true,
         toBranch: true,
-        requestedBy: { select: { firstName: true, lastName: true } },
-        items: { include: { product: true } },
+        requestedBy: { select: { id: true, firstName: true, lastName: true } },
+        items: {
+          include: { product: true },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
     if (!transfer) throw new NotFoundException('Transfer not found');
@@ -222,8 +241,12 @@ export class TransfersService {
     return status;
   }
 
+  // Allow both BRANCH_MANAGER and SUPER_ADMIN at the receiving branch
   private assertIsReceivingManager(transfer: { toBranchId: string }, user: AuthUser) {
-    if (user.role !== UserRole.BRANCH_MANAGER || user.branchId !== transfer.toBranchId)
+    const canRespond =
+      (user.role === UserRole.BRANCH_MANAGER || user.role === UserRole.SUPER_ADMIN) &&
+      user.branchId === transfer.toBranchId;
+    if (!canRespond)
       throw new ForbiddenException('Only the receiving branch manager can act on this transfer');
   }
 
