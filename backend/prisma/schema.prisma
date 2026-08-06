@@ -230,15 +230,24 @@ model Device {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  fingerprint String      @unique
+  fingerprint String       @unique
   name        String?
   status      DeviceStatus @default(PENDING)
 
-  requestCode    String?
+  requestCode       String?
   requestCodeExpiry DateTime?
 
   approvedById String?
   approvedBy   User?   @relation("ApprovedBy", fields: [approvedById], references: [id])
+
+  // ── NEW: login-attempt location (populated when device request is created) ──
+  loginIpAddress String?
+  loginLatitude  Float?
+  loginLongitude Float?
+  loginCity      String?
+  loginRegion    String?
+  loginCountry   String?
+  // ──────────────────────────────────────────────────────────────────────────
 
   lastUsedAt DateTime?
   createdAt  DateTime  @default(now())
