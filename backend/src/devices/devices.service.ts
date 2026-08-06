@@ -46,7 +46,15 @@ export class DevicesService {
   async requestAuthorization(
     userId: string,
     fingerprint: string,
-    deviceInfo: { ipAddress: string; userAgent: string },
+    deviceInfo: {
+      ipAddress: string;
+      userAgent: string;
+      latitude?: number;
+      longitude?: number;
+      city?: string;
+      region?: string;
+      country?: string;
+    },
   ) {
     const existingDevice = await this.prisma.device.findUnique({
       where: { fingerprint },
@@ -71,9 +79,14 @@ export class DevicesService {
       data: {
         userId,
         fingerprint,
-        // Store user-agent in the name field (best available column)
         name: deviceInfo.userAgent?.substring(0, 100) || 'Unknown device',
         status: DeviceStatus.PENDING,
+        loginIpAddress: deviceInfo.ipAddress ?? null,
+        loginLatitude:  deviceInfo.latitude  ?? null,
+        loginLongitude: deviceInfo.longitude ?? null,
+        loginCity:      deviceInfo.city      ?? null,
+        loginRegion:    deviceInfo.region    ?? null,
+        loginCountry:   deviceInfo.country   ?? null,
       },
     });
 
@@ -113,39 +126,59 @@ export class DevicesService {
       },
     });
 
-    try {
-      const transporter = this.getMailTransporter();
-      await transporter.sendMail({
-        from: `"Njugush POS" <${process.env.EMAIL_USER}>`,
-        to: device.user.email,
-        subject: 'Device Authorization Code - Njugush POS',
-        html: `
-          <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-            <h2 style="color: #2563eb;">Device Authorization</h2>
-            <p>Your device has been approved. Use the code below to complete login:</p>
-            <div style="background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
-              <h1 style="letter-spacing: 12px; color: #2563eb; font-size: 36px; margin: 0;">${code}</h1>
+    let emailSent = false;
+    let emailError: string | null = null;
+
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+      emailError = 'EMAIL_USER / EMAIL_PASS not configured on the server — share the code directly with the user.';
+      console.warn('[DevicesService] Email credentials missing. Code was generated but not emailed.');
+    } else {
+      try {
+        const transporter = this.getMailTransporter();
+        await transporter.sendMail({
+          from: `"Njugush POS" <${process.env.EMAIL_USER}>`,
+          to: device.user.email,
+          subject: 'Device Authorization Code - Njugush POS',
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+              <h2 style="color: #2563eb;">Device Authorization</h2>
+              <p>Your device has been approved. Use the code below to complete login:</p>
+              <div style="background: #f3f4f6; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
+                <h1 style="letter-spacing: 12px; color: #2563eb; font-size: 36px; margin: 0;">${code}</h1>
+              </div>
+              <p>This code expires in <strong>30 minutes</strong>.</p>
+              <p style="color: #ef4444;">If you did not request this, contact your administrator immediately.</p>
+              <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
+              <p style="font-size: 12px; color: #6b7280;">Njugush Enterprises POS System</p>
             </div>
-            <p>This code expires in <strong>30 minutes</strong>.</p>
-            <p style="color: #ef4444;">If you did not request this, contact your administrator immediately.</p>
-            <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
-            <p style="font-size: 12px; color: #6b7280;">Njugush Enterprises POS System</p>
-          </div>
-        `,
-      });
-    } catch (err) {
-      console.error('Failed to send auth code email:', err.message);
+          `,
+        });
+        emailSent = true;
+      } catch (err: any) {
+        emailError = `Email delivery failed (${err.message}). Share the code directly with the user.`;
+        console.error('[DevicesService] Failed to send auth code email:', err.message);
+      }
     }
 
     await this.auditLogsService.create({
       userId: approvedById,
       action: 'DEVICE_APPROVED',
-      description: `Device ${deviceId} approved for user ${device.user.email}`,
+      description: `Device ${deviceId} approved for user ${device.user.email}${emailSent ? ' — code emailed' : ' — code not emailed'}`,
       entityType: 'Device',
       entityId: deviceId,
     });
 
-    return { message: 'Device approved and code sent to user email' };
+    // Always return the plain code so admin can share it directly when email fails
+    return {
+      message: emailSent
+        ? 'Device approved — authorization code sent to user email'
+        : 'Device approved — email not sent, use the code below',
+      code,             // plain 6-digit code for admin to share directly
+      emailSent,
+      emailError,
+      userEmail: device.user.email,
+      userName: `${device.user.firstName} ${device.user.lastName}`,
+    };
   }
 
   async verifyAuthorizationCode(requestId: string, code: string) {
