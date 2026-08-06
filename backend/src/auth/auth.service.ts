@@ -95,10 +95,32 @@ export class AuthService {
       );
 
       if (!deviceCheck.isAuthorized) {
+        // Resolve a human-readable location for the admin approval card.
+        // Use browser GPS if provided; fall back to IP lookup either way.
+        let locationCity: string | undefined;
+        let locationRegion: string | undefined;
+        let locationCountry: string | undefined;
+        try {
+          const ipLoc = await this.geoService.getIpLocation(ipAddress);
+          locationCity    = ipLoc.city;
+          locationRegion  = ipLoc.region;
+          locationCountry = ipLoc.country;
+        } catch (_) {
+          // Non-blocking — location display is best-effort
+        }
+
         const deviceResult = await this.devicesService.requestAuthorization(
           user.id,
           deviceFingerprint,
-          { ipAddress, userAgent },
+          {
+            ipAddress,
+            userAgent,
+            latitude:  latitude  ?? undefined,
+            longitude: longitude ?? undefined,
+            city:    locationCity,
+            region:  locationRegion,
+            country: locationCountry,
+          },
         );
 
         return {
