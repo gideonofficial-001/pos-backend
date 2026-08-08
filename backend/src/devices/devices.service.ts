@@ -5,7 +5,8 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogsService } from '../audit-logs/audit-logs.service';
-import { DeviceStatus } from '@prisma/client';
+import { NotificationsService } from '../notifications/notifications.service';
+import { DeviceStatus, UserRole } from '@prisma/client';
 import * as nodemailer from 'nodemailer';
 import * as bcrypt from 'bcrypt';
 
@@ -14,6 +15,7 @@ export class DevicesService {
   constructor(
     private prisma: PrismaService,
     private auditLogsService: AuditLogsService,
+    private notificationsService: NotificationsService,
   ) {}
 
   private getMailTransporter() {
@@ -75,6 +77,17 @@ export class DevicesService {
       );
     }
 
+    // Fetch user + branch so we can build a useful admin notification message
+    const requestingUser = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        firstName: true,
+        lastName: true,
+        email: true,
+        branch: { select: { name: true } },
+      },
+    });
+
     const device = await this.prisma.device.create({
       data: {
         userId,
@@ -99,6 +112,33 @@ export class DevicesService {
       ipAddress: deviceInfo.ipAddress,
       userAgent: deviceInfo.userAgent,
     });
+
+    // ── Notify all admins so they can action it immediately ──────────────────
+    const userName = requestingUser
+      ? `${requestingUser.firstName} ${requestingUser.lastName}`
+      : 'A user';
+    const branchName = requestingUser?.branch?.name ?? 'unknown branch';
+    const locationParts = [deviceInfo.city, deviceInfo.region, deviceInfo.country].filter(Boolean);
+    const locationStr = locationParts.length > 0 ? ` from ${locationParts.join(', ')}` : '';
+
+    const admins = await this.prisma.user.findMany({
+      where: { role: { in: [UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER] } },
+      select: { id: true },
+    });
+
+    await Promise.all(
+      admins.map((admin) =>
+        this.notificationsService.create({
+          type: 'DEVICE_AUTH',
+          title: 'New Device Login Request',
+          message: `${userName} (${branchName}) is trying to log in${locationStr} on a new device. Approve or reject in Pending Approvals.`,
+          userId: admin.id,
+          entityId: device.id,
+          entityType: 'Device',
+        }),
+      ),
+    );
+    // ─────────────────────────────────────────────────────────────────────────
 
     return { requestId: device.id, status: DeviceStatus.PENDING };
   }
