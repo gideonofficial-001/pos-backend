@@ -58,26 +58,14 @@ export class DevicesService {
       country?: string;
     },
   ) {
-    const existingDevice = await this.prisma.device.findUnique({
-      where: { fingerprint },
-    });
+    // ─── Pre-generate a 6-digit code for THIS request ────────────────────────
+    // The plain code goes into the admin notification so they can share it
+    // immediately without navigating to Pending Approvals.
+    const plainCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const hashedCode = await bcrypt.hash(plainCode, 10);
+    const codeExpiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
 
-    if (existingDevice) {
-      return { requestId: existingDevice.id, status: existingDevice.status };
-    }
-
-    // Enforce 1 approved device per user
-    const approvedCount = await this.prisma.device.count({
-      where: { userId, status: DeviceStatus.APPROVED },
-    });
-
-    if (approvedCount >= 1) {
-      throw new UnauthorizedException(
-        'Security limit reached: user already has an active approved device.',
-      );
-    }
-
-    // Fetch user + branch so we can build a useful admin notification message
+    // Fetch user + branch for notification message
     const requestingUser = await this.prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -88,12 +76,92 @@ export class DevicesService {
       },
     });
 
+    const userName = requestingUser
+      ? `${requestingUser.firstName} ${requestingUser.lastName}`
+      : 'A user';
+    const branchName = requestingUser?.branch?.name ?? 'unknown branch';
+    const locationParts = [deviceInfo.city, deviceInfo.region, deviceInfo.country].filter(Boolean);
+    const locationStr = locationParts.length > 0 ? locationParts.join(', ') : null;
+    const loginTime = new Date().toLocaleTimeString('en-KE', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+    // ─── BUG FIX 1 + 2: Handle existing device records ───────────────────────
+    // Previously: any existing device caused an early return with NO notification.
+    // REVOKED devices left the user in a permanent dead-end.
+    // Fix: PENDING → refresh code + resend notification.
+    //      REVOKED → delete stale record, treat as new device.
+    //      APPROVED → should not reach here (validateDevice blocks earlier), but handle safely.
+    const existingDevice = await this.prisma.device.findUnique({
+      where: { fingerprint },
+    });
+
+    if (existingDevice) {
+      if (existingDevice.status === DeviceStatus.APPROVED) {
+        // Device is already approved — nothing to do.
+        return { requestId: existingDevice.id, status: existingDevice.status };
+      }
+
+      if (existingDevice.status === DeviceStatus.REVOKED) {
+        // BUG FIX 2: REVOKED device — delete it so a fresh request can be made.
+        await this.prisma.device.delete({ where: { id: existingDevice.id } });
+        // Fall through to create a new device record below.
+      } else {
+        // status === PENDING
+        // BUG FIX 1: Refresh the code and RE-SEND the notification.
+        // Previously this just returned silently — admin was never told again.
+        await this.prisma.device.update({
+          where: { id: existingDevice.id },
+          data: {
+            requestCode: hashedCode,
+            requestCodeExpiry: codeExpiry,
+            // Refresh location in case it changed
+            loginIpAddress: deviceInfo.ipAddress ?? existingDevice.loginIpAddress,
+            loginCity:      deviceInfo.city      ?? existingDevice.loginCity,
+            loginRegion:    deviceInfo.region    ?? existingDevice.loginRegion,
+            loginCountry:   deviceInfo.country   ?? existingDevice.loginCountry,
+          },
+        });
+
+        await this.sendAdminNotification(
+          userId,
+          existingDevice.id,
+          userName,
+          branchName,
+          locationStr,
+          loginTime,
+          plainCode,
+        );
+
+        return { requestId: existingDevice.id, status: existingDevice.status };
+      }
+    }
+
+    // ─── Enforce 1 approved device per user ──────────────────────────────────
+    const approvedCount = await this.prisma.device.count({
+      where: { userId, status: DeviceStatus.APPROVED },
+    });
+
+    if (approvedCount >= 1) {
+      throw new UnauthorizedException(
+        'Security limit reached: user already has an active approved device.',
+      );
+    }
+
+    // ─── Create new device record ─────────────────────────────────────────────
+    // The pre-generated code is stored hashed. Device stays PENDING so it
+    // still shows up in the admin's Pending Approvals tab. The code is valid
+    // immediately — verifyAuthorizationCode now accepts PENDING status — so
+    // the admin can simply copy the code from the notification and share it.
     const device = await this.prisma.device.create({
       data: {
         userId,
         fingerprint,
         name: deviceInfo.userAgent?.substring(0, 100) || 'Unknown device',
         status: DeviceStatus.PENDING,
+        requestCode: hashedCode,
+        requestCodeExpiry: codeExpiry,
         loginIpAddress: deviceInfo.ipAddress ?? null,
         loginLatitude:  deviceInfo.latitude  ?? null,
         loginLongitude: deviceInfo.longitude ?? null,
@@ -113,35 +181,61 @@ export class DevicesService {
       userAgent: deviceInfo.userAgent,
     });
 
-    // ── Notify all admins so they can action it immediately ──────────────────
-    const userName = requestingUser
-      ? `${requestingUser.firstName} ${requestingUser.lastName}`
-      : 'A user';
-    const branchName = requestingUser?.branch?.name ?? 'unknown branch';
-    const locationParts = [deviceInfo.city, deviceInfo.region, deviceInfo.country].filter(Boolean);
-    const locationStr = locationParts.length > 0 ? ` from ${locationParts.join(', ')}` : '';
+    // BUG FIX 3: Notification now contains the authorization code directly.
+    await this.sendAdminNotification(
+      userId,
+      device.id,
+      userName,
+      branchName,
+      locationStr,
+      loginTime,
+      plainCode,
+    );
 
+    return { requestId: device.id, status: DeviceStatus.PENDING };
+  }
+
+  // ─── Private: Build notification message and deliver to all SUPER_ADMINs ───
+
+  private async sendAdminNotification(
+    userId: string,
+    deviceId: string,
+    userName: string,
+    branchName: string,
+    locationStr: string | null,
+    loginTime: string,
+    plainCode: string,
+  ) {
     const admins = await this.prisma.user.findMany({
       where: { role: UserRole.SUPER_ADMIN },
       select: { id: true },
     });
 
+    const locationPart = locationStr ? ` from ${locationStr}` : '';
+
+    // The message embeds the code so the admin can copy it right from the
+    // notification card without navigating to Pending Approvals.
+    const message =
+      `${userName} (${branchName}) is trying to log in${locationPart} ` +
+      `at ${loginTime} on a new device. ` +
+      `Authorization code: ${plainCode} (expires in 30 min). ` +
+      `You can also approve via Pending Approvals to generate a new code.`;
+
     await Promise.all(
       admins.map((admin) =>
         this.notificationsService.create({
           type: 'DEVICE_AUTH',
-          title: 'New Device Login Request',
-          message: `${userName} (${branchName}) is trying to log in${locationStr} on a new device. Approve or reject in Pending Approvals.`,
+          title: `New Device Login — ${userName}`,
+          message,
           userId: admin.id,
-          entityId: device.id,
+          entityId: deviceId,
           entityType: 'Device',
         }),
       ),
     );
-    // ─────────────────────────────────────────────────────────────────────────
-
-    return { requestId: device.id, status: DeviceStatus.PENDING };
   }
+
+  // ─── Admin: Approve device and generate a fresh code ─────────────────────
 
   async generateAuthorizationCode(deviceId: string, approvedById: string) {
     const device = await this.prisma.device.findUnique({
@@ -221,24 +315,33 @@ export class DevicesService {
     };
   }
 
+  // ─── User: Verify the 6-digit code ───────────────────────────────────────
+
   async verifyAuthorizationCode(requestId: string, code: string) {
     const device = await this.prisma.device.findUnique({
       where: { id: requestId },
     });
 
-    if (!device || device.status !== DeviceStatus.APPROVED) {
-      return { valid: false, message: 'Device not approved' };
+    // BUG FIX: Previously this blocked PENDING devices entirely.
+    // Now we allow PENDING (pre-generated code) OR APPROVED (admin clicked Approve).
+    // REVOKED is the only status that hard-blocks.
+    if (!device) {
+      return { valid: false, message: 'Device not found' };
+    }
+
+    if (device.status === DeviceStatus.REVOKED) {
+      return { valid: false, message: 'Device has been revoked. Contact your administrator.' };
     }
 
     if (!device.requestCode) {
-      return { valid: false, message: 'No authorization code found' };
+      return { valid: false, message: 'No authorization code found. Ask admin to approve your device.' };
     }
 
     if (
       device.requestCodeExpiry &&
       device.requestCodeExpiry < new Date()
     ) {
-      return { valid: false, message: 'Authorization code has expired' };
+      return { valid: false, message: 'Authorization code has expired. Please log in again to request a new one.' };
     }
 
     const isValid = await bcrypt.compare(code, device.requestCode);
@@ -246,10 +349,14 @@ export class DevicesService {
       return { valid: false, message: 'Invalid authorization code' };
     }
 
-    // Clear code after single use
+    // Mark device as APPROVED and clear the one-time code
     await this.prisma.device.update({
       where: { id: requestId },
-      data: { requestCode: null, requestCodeExpiry: null },
+      data: {
+        status: DeviceStatus.APPROVED,
+        requestCode: null,
+        requestCodeExpiry: null,
+      },
     });
 
     return { valid: true, userId: device.userId };
