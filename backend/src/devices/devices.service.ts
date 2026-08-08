@@ -122,7 +122,7 @@ export class DevicesService {
     const locationStr = locationParts.length > 0 ? ` from ${locationParts.join(', ')}` : '';
 
     const admins = await this.prisma.user.findMany({
-      where: { role: { in: [UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER] } },
+      where: { role: UserRole.SUPER_ADMIN },
       select: { id: true },
     });
 
