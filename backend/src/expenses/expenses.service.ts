@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { ExpenseStatus } from '@prisma/client';
+import { ExpenseStatus, UserRole } from '@prisma/client';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 
 @Injectable()
@@ -34,14 +34,23 @@ export class ExpensesService {
       },
     });
 
-    await this.notificationsService.create({
-      type: 'EXPENSE_SUBMITTED',
-      title: 'New Expense Submitted',
-      message: `Expense ${expenseCode} from ${expense.branch.name} - KES ${Number(amount).toFixed(2)}`,
-      userId: user.userId,
-      entityId: expense.id,
-      entityType: 'Expense',
+    // Notify all admins who need to action the expense — NOT the submitter.
+    const admins = await this.prisma.user.findMany({
+      where: { role: { in: [UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER] } },
+      select: { id: true },
     });
+    await Promise.all(
+      admins.map((admin) =>
+        this.notificationsService.create({
+          type: 'EXPENSE_SUBMITTED',
+          title: 'New Expense Submitted',
+          message: `Expense ${expenseCode} from ${expense.branch.name} — KES ${Number(amount).toFixed(2)}`,
+          userId: admin.id,
+          entityId: expense.id,
+          entityType: 'Expense',
+        }),
+      ),
+    );
 
     await this.prisma.activityFeed.create({
       data: {
