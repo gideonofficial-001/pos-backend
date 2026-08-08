@@ -36,7 +36,7 @@ export class ExpensesService {
 
     // Notify all admins who need to action the expense — NOT the submitter.
     const admins = await this.prisma.user.findMany({
-      where: { role: { in: [UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER] } },
+      where: { role: UserRole.SUPER_ADMIN },
       select: { id: true },
     });
     await Promise.all(
