@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { ReturnStatus, MovementType } from '@prisma/client';
+import { ReturnStatus, MovementType, UserRole } from '@prisma/client';
 import { CreateReturnDto } from './dto/create-return.dto';
 
 @Injectable()
@@ -47,14 +47,24 @@ export class ReturnsService {
       },
     });
 
-    await this.notificationsService.create({
-      type: 'RETURN_REQUEST',
-      title: 'New Return Request',
-      message: `Return ${returnCode} for sale ${sale.saleCode} - Reason: ${reason}`,
-      userId: user.userId,
-      entityId: returnRequest.id,
-      entityType: 'Return',
+    // Notify all admins who need to action the return — NOT the submitter.
+    // The submitter (branch manager) already knows they submitted it.
+    const admins = await this.prisma.user.findMany({
+      where: { role: { in: [UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER] } },
+      select: { id: true },
     });
+    await Promise.all(
+      admins.map((admin) =>
+        this.notificationsService.create({
+          type: 'RETURN_REQUEST',
+          title: 'New Return Request',
+          message: `Return ${returnCode} for sale ${sale.saleCode} — Reason: ${reason}`,
+          userId: admin.id,
+          entityId: returnRequest.id,
+          entityType: 'Return',
+        }),
+      ),
+    );
 
     await this.prisma.activityFeed.create({
       data: {
