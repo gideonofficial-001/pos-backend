@@ -50,7 +50,7 @@ export class ReturnsService {
     // Notify all admins who need to action the return — NOT the submitter.
     // The submitter (branch manager) already knows they submitted it.
     const admins = await this.prisma.user.findMany({
-      where: { role: { in: [UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER] } },
+      where: { role: UserRole.SUPER_ADMIN },
       select: { id: true },
     });
     await Promise.all(
