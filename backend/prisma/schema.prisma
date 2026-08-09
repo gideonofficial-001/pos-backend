@@ -230,7 +230,7 @@ model Device {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  fingerprint String       @unique
+  fingerprint String   // ← no longer globally @unique
   name        String?
   status      DeviceStatus @default(PENDING)
 
@@ -240,22 +240,21 @@ model Device {
   approvedById String?
   approvedBy   User?   @relation("ApprovedBy", fields: [approvedById], references: [id])
 
-  // ── NEW: login-attempt location (populated when device request is created) ──
+  // Login-attempt location (populated when device request is created)
   loginIpAddress String?
   loginLatitude  Float?
   loginLongitude Float?
   loginCity      String?
   loginRegion    String?
   loginCountry   String?
-  // ──────────────────────────────────────────────────────────────────────────
 
   lastUsedAt DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
+  @@unique([userId, fingerprint])  // ← unique PER USER, not globally
   @@map("devices")
 }
-
 model Branch {
   id      String  @id @default(uuid())
   name    String
