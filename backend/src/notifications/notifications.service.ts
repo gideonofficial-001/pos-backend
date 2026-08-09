@@ -29,7 +29,7 @@ export class NotificationsService {
     entityType?: string;
   }) {
     try {
-      return this.prisma.notification.create({
+      return await this.prisma.notification.create({
         data: {
           type: data.type as any,
           title: data.title,
@@ -40,8 +40,13 @@ export class NotificationsService {
           status: NotificationStatus.UNREAD,
         },
       });
-    } catch (error) {
-      this.logger.error('Failed to create notification', error);
+    } catch (error: any) {
+      // Log with full stack so the error is traceable in Render logs,
+      // but return null so a notification failure never crashes the caller's flow.
+      this.logger.error(
+        `Failed to create notification (type=${data.type}, userId=${data.userId}): ${error.message}`,
+        error.stack,
+      );
       return null;
     }
   }
