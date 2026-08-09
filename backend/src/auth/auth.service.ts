@@ -89,6 +89,15 @@ export class AuthService {
 
     // 4. Device check (skip for SUPER_ADMIN)
     if (user.role !== 'SUPER_ADMIN') {
+      // Guard: fingerprint is marked @IsOptional in DTO but is required for the
+      // device-auth flow. Any client that omits it gets a clear 400 error instead
+      // of a Prisma crash from querying a @unique field with undefined.
+      if (!deviceFingerprint) {
+        throw new BadRequestException(
+          'Device fingerprint is required. Please log in from the official app.',
+        );
+      }
+
       const deviceCheck = await this.devicesService.validateDevice(
         user.id,
         deviceFingerprint,
@@ -130,7 +139,7 @@ export class AuthService {
         };
       }
 
-      await this.devicesService.updateLastUsed(deviceFingerprint);
+      await this.devicesService.updateLastUsed(user.id, deviceFingerprint);
     }
 
     // 5. Location check
