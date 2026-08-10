@@ -229,13 +229,18 @@ export class DevicesService {
       }
     }
 
-    await this.auditLogsService.create({
-      userId: approvedById,
-      action: 'DEVICE_APPROVED',
-      description: `Device ${deviceId} approved for user ${device.user.email}${emailSent ? ' — code emailed' : ' — code not emailed'}`,
-      entityType: 'Device',
-      entityId: deviceId,
-    });
+    // Audit log — wrapped so a DB constraint on approvedById never blocks the response
+    try {
+      await this.auditLogsService.create({
+        userId: approvedById ?? undefined,
+        action: 'DEVICE_APPROVED',
+        description: `Device ${deviceId} approved for user ${device.user.email}${emailSent ? ' — code emailed' : ' — code not emailed'}`,
+        entityType: 'Device',
+        entityId: deviceId,
+      });
+    } catch (auditErr: any) {
+      this.logger.warn(`[DevicesService] Audit log failed (non-blocking): ${auditErr.message}`);
+    }
 
     // Always return the plain code so admin can share it directly when email fails
     return {
