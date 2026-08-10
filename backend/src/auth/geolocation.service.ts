@@ -163,20 +163,47 @@ export class GeolocationService {
    */
   async getIpLocation(ipAddress: string): Promise<Partial<GeoLocation> & { city?: string; region?: string; country?: string }> {
     try {
-      // Free tier: ipapi.co
-      // Replace with your preferred IP geolocation service
-      const response = await fetch(`https://ipapi.co/${ipAddress}/json/`);
+      // Skip lookup for private/loopback IPs (common in local dev and some proxies)
+      if (
+        !ipAddress ||
+        ipAddress === 'unknown' ||
+        ipAddress.startsWith('10.') ||
+        ipAddress.startsWith('192.168.') ||
+        ipAddress.startsWith('172.') ||
+        ipAddress === '127.0.0.1' ||
+        ipAddress === '::1'
+      ) {
+        return {};
+      }
+
+      // 5-second timeout so a slow/unresponsive ipapi.co never hangs the login flow
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+
+      const response = await fetch(
+        `https://ipapi.co/${ipAddress}/json/`,
+        { signal: controller.signal },
+      );
+      clearTimeout(timeout);
+
       const data = await response.json();
 
+      // ipapi.co returns { error: true, reason: "..." } when rate-limited or invalid
+      if (data.error) {
+        this.logger.warn(`[GeolocationService] ipapi.co error for ${ipAddress}: ${data.reason}`);
+        return {};
+      }
+
       return {
-        latitude: data.latitude,
+        latitude:  data.latitude,
         longitude: data.longitude,
-        city: data.city,
-        region: data.region,
-        country: data.country_name,
+        city:      data.city,
+        region:    data.region,
+        country:   data.country_name,
       };
-    } catch (error) {
-      this.logger.error(`Failed to get IP location for ${ipAddress}`, error);
+    } catch (error: any) {
+      const reason = error.name === 'AbortError' ? 'timeout' : error.message;
+      this.logger.error(`[GeolocationService] IP lookup failed for ${ipAddress}: ${reason}`);
       return {};
     }
   }
