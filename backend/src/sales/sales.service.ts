@@ -75,12 +75,33 @@ export class SalesService {
         }
       } else if (
         variant === LpgSaleVariant.REFILL ||
-        variant === LpgSaleVariant.COMPLETE_SET ||
         inventory.product.type === ProductType.LPG_CYLINDER
       ) {
+        // Needs full cylinders only
         if ((inventory.fullCylinders ?? 0) < item.quantity) {
           throw new BadRequestException(
             `Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders ?? 0}`,
+          );
+        }
+      } else if (variant === LpgSaleVariant.COMPLETE_SET) {
+        // Needs BOTH a full cylinder AND an empty shell per unit
+        const fullAvailable = inventory.fullCylinders ?? 0;
+        const emptyAvailable = inventory.fullCylinders != null
+          ? inventory.quantity - inventory.fullCylinders
+          : 0;
+        if (fullAvailable < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient full cylinders for ${inventory.product.name}. Available: ${fullAvailable}`,
+          );
+        }
+        if (emptyAvailable < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient empty shells for ${inventory.product.name} (needed for complete set). Available: ${emptyAvailable}`,
+          );
+        }
+        if (inventory.product.emptyPrice == null) {
+          throw new BadRequestException(
+            `Empty shell price is not configured for ${inventory.product.name}`,
           );
         }
       } else {
