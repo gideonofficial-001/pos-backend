@@ -164,6 +164,18 @@ export class NotificationsService {
     };
   }
 
+  // ── Delete ───────────────────────────────────────────────────────────────────
+
+  async delete(id: string, userId: string) {
+    // Users can only delete their own notifications or global ones
+    return this.prisma.notification.deleteMany({
+      where: {
+        id,
+        OR: [{ userId }, { userId: null }],
+      },
+    });
+  }
+
   // ── Private ───────────────────────────────────────────────────────────────
 
   private buildWhere(userId: string, userRole?: UserRole) {
