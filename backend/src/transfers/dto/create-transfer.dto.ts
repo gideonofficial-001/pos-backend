@@ -1,42 +1,49 @@
-import { IsNotEmpty, IsString, IsOptional, IsArray, ValidateNested, IsNumber, IsPositive, ArrayMinSize, IsIn } from 'class-validator';
+import {
+  IsString,
+  IsUUID,
+  IsArray,
+  ValidateNested,
+  IsNumber,
+  IsOptional,
+  IsIn,
+  Min,
+  ArrayMinSize,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
-class TransferItemDto {
+export class TransferItemDto {
   @ApiProperty()
-  @IsNotEmpty({ message: 'Product ID is required for every transfer item' })
-  @IsString()
+  @IsUUID()
   productId: string;
 
   @ApiProperty()
-  @IsNotEmpty()
-  @IsNumber({}, { message: 'Quantity must be a number' })
-  @IsPositive({ message: 'Quantity must be greater than 0' })
+  @IsNumber()
+  @Min(1)
   quantity: number;
 
-  // STANDARD for regular products. Cylinder-tracked LPG products must use
-  // REFILL (moves full/gas-filled cylinders) or EMPTY_SHELL (moves empty
-  // shells) instead — see TransfersService.create for the validation.
-  @ApiProperty({ required: false, enum: ['STANDARD', 'REFILL', 'EMPTY_SHELL'], default: 'STANDARD' })
+  // STANDARD   = non-LPG products
+  // REFILL     = gas refill (full gas, no physical cylinder moving)
+  // CYLINDER   = full physical cylinder being moved to another branch
+  // EMPTY_SHELL = empty cylinder shell being returned/moved
+  @ApiProperty({ required: false, enum: ['STANDARD', 'REFILL', 'CYLINDER', 'EMPTY_SHELL'] })
   @IsOptional()
-  @IsIn(['STANDARD', 'REFILL', 'EMPTY_SHELL'])
-  variant?: 'STANDARD' | 'REFILL' | 'EMPTY_SHELL';
+  @IsIn(['STANDARD', 'REFILL', 'CYLINDER', 'EMPTY_SHELL'])
+  variant?: 'STANDARD' | 'REFILL' | 'CYLINDER' | 'EMPTY_SHELL';
 }
 
 export class CreateTransferDto {
   @ApiProperty()
-  @IsNotEmpty({ message: 'Source branch ID is required' })
-  @IsString()
+  @IsUUID()
   fromBranchId: string;
 
   @ApiProperty()
-  @IsNotEmpty({ message: 'Destination branch ID is required' })
-  @IsString()
+  @IsUUID()
   toBranchId: string;
 
   @ApiProperty({ type: [TransferItemDto] })
   @IsArray()
-  @ArrayMinSize(1, { message: 'At least one product must be included in the transfer' })
+  @ArrayMinSize(1)
   @ValidateNested({ each: true })
   @Type(() => TransferItemDto)
   items: TransferItemDto[];
