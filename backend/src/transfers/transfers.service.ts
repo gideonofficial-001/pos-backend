@@ -69,8 +69,8 @@ export class TransfersService {
       const variant = item.variant ?? 'STANDARD';
       const isLpg = inventory.product.isCylinderTracked;
 
-      if (isLpg && variant === 'REFILL') {
-        // Moving gas-filled cylinders — check fullCylinders
+      if (isLpg && (variant === 'REFILL' || variant === 'CYLINDER')) {
+        // REFILL = gas refill, CYLINDER = full physical cylinder — both use fullCylinders stock
         const available = inventory.fullCylinders ?? 0;
         if (available < item.quantity)
           throw new BadRequestException(
@@ -212,11 +212,11 @@ export class TransfersService {
     if (sourceInv) {
       let updateData: any = {};
 
-      if (isLpg && variant === 'REFILL') {
+      if (isLpg && (variant === 'REFILL' || variant === 'CYLINDER')) {
         if ((sourceInv.fullCylinders ?? 0) < item.quantity)
           throw new BadRequestException('Insufficient full cylinders at source');
         updateData.fullCylinders = { decrement: item.quantity };
-        // total quantity unchanged (empty shell stays at sender)
+        // total quantity unchanged (the shell count stays at sender)
       } else if (isLpg && variant === 'EMPTY_SHELL') {
         const empties = sourceInv.fullCylinders != null
           ? sourceInv.quantity - sourceInv.fullCylinders
@@ -253,9 +253,9 @@ export class TransfersService {
     if (destInv) {
       let updateData: any = {};
 
-      if (isLpg && variant === 'REFILL') {
+      if (isLpg && (variant === 'REFILL' || variant === 'CYLINDER')) {
         updateData.fullCylinders = { increment: item.quantity };
-        // total quantity unchanged — sender's empty shell didn't move
+        // total quantity unchanged — shell count unaffected
       } else if (isLpg && variant === 'EMPTY_SHELL') {
         updateData.quantity = { increment: item.quantity };
       } else {
@@ -278,7 +278,7 @@ export class TransfersService {
     } else {
       // Create inventory record if receiver doesn't have this product yet
       const createData: any = { branchId: transfer.toBranchId, productId: item.productId };
-      if (isLpg && variant === 'REFILL') {
+      if (isLpg && (variant === 'REFILL' || variant === 'CYLINDER')) {
         createData.quantity = 0;
         createData.fullCylinders = item.quantity;
       } else {
