@@ -1,55 +1,42 @@
-import {
-  IsString,
-  IsUUID,
-  IsArray,
-  ValidateNested,
-  IsNumber,
-  IsOptional,
-  IsIn,
-  Min,
-  ArrayMinSize,
-} from 'class-validator';
+import { IsNotEmpty, IsString, IsOptional, IsArray, ValidateNested, IsNumber, IsEnum } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ApiProperty } from '@nestjs/swagger';
+
+export enum TransferVariant {
+  STANDARD = 'STANDARD',
+  REFILL = 'REFILL',
+  CYLINDER = 'CYLINDER',
+  EMPTY_SHELL = 'EMPTY_SHELL'
+}
 
 export class TransferItemDto {
-  @ApiProperty()
-  @IsUUID()
+  @IsNotEmpty()
+  @IsString()
   productId: string;
 
-  @ApiProperty()
+  @IsNotEmpty()
   @IsNumber()
-  @Min(1)
   quantity: number;
 
-  // STANDARD   = non-LPG products
-  // REFILL     = gas refill (full gas, no physical cylinder moving)
-  // CYLINDER   = full physical cylinder being moved to another branch
-  // EMPTY_SHELL = empty cylinder shell being returned/moved
-  @ApiProperty({ required: false, enum: ['STANDARD', 'REFILL', 'CYLINDER', 'EMPTY_SHELL'] })
   @IsOptional()
-  @IsIn(['STANDARD', 'REFILL', 'CYLINDER', 'EMPTY_SHELL'])
-  variant?: 'STANDARD' | 'REFILL' | 'CYLINDER' | 'EMPTY_SHELL';
+  @IsEnum(TransferVariant)
+  variant?: TransferVariant;
 }
 
 export class CreateTransferDto {
-  @ApiProperty()
-  @IsUUID()
-  fromBranchId: string;
+  @IsOptional()
+  @IsString()
+  fromBranchId?: string;
 
-  @ApiProperty()
-  @IsUUID()
+  @IsNotEmpty()
+  @IsString()
   toBranchId: string;
 
-  @ApiProperty({ type: [TransferItemDto] })
-  @IsArray()
-  @ArrayMinSize(1)
-  @ValidateNested({ each: true })
-  @Type(() => TransferItemDto)
-  items: TransferItemDto[];
-
-  @ApiProperty({ required: false })
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => TransferItemDto)
+  items: TransferItemDto[];
 }
