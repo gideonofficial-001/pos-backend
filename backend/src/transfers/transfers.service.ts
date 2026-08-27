@@ -7,7 +7,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateTransferDto } from './dto/create-transfer.dto';
-import { TransferStatus, TransferItemStatus, MovementType, UserRole } from '@prisma/client';
+import { TransferStatus, TransferItemStatus, MovementType, UserRole, LpgComponent } from '@prisma/client';
 
 interface AuthUser {
   userId: string;
@@ -15,12 +15,12 @@ interface AuthUser {
   branchId?: string;
 }
 
-function itemLabel(item: { quantity: number; product: { name: string }; variant?: string }): string {
-  const v = item.variant && item.variant !== 'STANDARD' ? ` (${item.variant})` : '';
+function itemLabel(item: { quantity: number; product: { name: string }; lpgComponent?: string | null }): string {
+  const v = item.lpgComponent ? ` (${item.lpgComponent})` : '';
   return `${item.product.name}${v} x${item.quantity}`;
 }
 
-function buildItemsSummary(items: { quantity: number; product: { name: string }; variant?: string }[]): string {
+function buildItemsSummary(items: { quantity: number; product: { name: string }; lpgComponent?: string | null }[]): string {
   return items.map(itemLabel).join(', ');
 }
 
@@ -32,14 +32,17 @@ export class TransfersService {
   ) {}
 
   async create(data: CreateTransferDto, user: AuthUser) {
-    const { fromBranchId, toBranchId, items, notes } = data;
+    const fromBranchId = data.fromBranchId || user.branchId;
+    const toBranchId = data.toBranchId;
+    const { items, notes } = data;
 
-    if (!items || items.length === 0)
-      throw new BadRequestException('At least one product must be included');
-    if (fromBranchId === toBranchId)
-      throw new BadRequestException('Source and destination branches cannot be the same');
-    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== fromBranchId)
+    if (!fromBranchId) throw new BadRequestException('Source branch ID is required');
+    if (!items || items.length === 0) throw new BadRequestException('At least one product must be included');
+    if (fromBranchId === toBranchId) throw new BadRequestException('Source and destination branches cannot be the same');
+    
+    if (user.role === UserRole.BRANCH_MANAGER && user.branchId !== fromBranchId) {
       throw new ForbiddenException('You can only transfer from your assigned branch');
+    }
 
     const [sourceBranch, destBranch] = await Promise.all([
       this.prisma.branch.findUnique({ where: { id: fromBranchId } }),
@@ -48,11 +51,9 @@ export class TransfersService {
 
     if (!sourceBranch) throw new NotFoundException('Source branch not found');
     if (!destBranch) throw new NotFoundException('Destination branch not found');
-    if (!destBranch.isActive)
-      throw new BadRequestException(`${destBranch.name} is inactive and cannot receive transfers`);
+    if (!destBranch.isActive) throw new BadRequestException(`${destBranch.name} is inactive and cannot receive transfers`);
 
-    // Validate each item's stock based on its variant
-    const transferItems: { productId: string; quantity: number; variant?: string }[] = [];
+    const transferItems: { productId: string; quantity: number; lpgComponent?: LpgComponent }[] = [];
 
     for (const item of items) {
       if (!item.quantity || item.quantity <= 0)
@@ -63,40 +64,35 @@ export class TransfersService {
         include: { product: true },
       });
 
-      if (!inventory)
-        throw new BadRequestException(`Product not found in source branch inventory`);
+      if (!inventory) throw new BadRequestException(`Product not found in source branch inventory`);
 
       const variant = item.variant ?? 'STANDARD';
       const isLpg = inventory.product.isCylinderTracked;
+      let lpgComponent: LpgComponent | undefined = undefined;
 
-      if (isLpg && (variant === 'REFILL' || variant === 'CYLINDER')) {
-        // REFILL = gas refill, CYLINDER = full physical cylinder — both use fullCylinders stock
-        const available = inventory.fullCylinders ?? 0;
-        if (available < item.quantity)
-          throw new BadRequestException(
-            `Insufficient full cylinders for ${inventory.product.name}. Available: ${available}, Requested: ${item.quantity}`,
-          );
-      } else if (isLpg && variant === 'EMPTY_SHELL') {
-        // Moving empty shells — check quantity - fullCylinders
-        const empties = inventory.fullCylinders != null
-          ? inventory.quantity - inventory.fullCylinders
-          : 0;
-        if (empties < item.quantity)
-          throw new BadRequestException(
-            `Insufficient empty shells for ${inventory.product.name}. Available: ${empties}, Requested: ${item.quantity}`,
-          );
+      if (isLpg) {
+        if (variant === 'CYLINDER') {
+          const available = inventory.fullCylinders ?? 0;
+          if (available < item.quantity) throw new BadRequestException(`Insufficient full cylinders. Available: ${available}`);
+          lpgComponent = LpgComponent.CYLINDER;
+        } else if (variant === 'REFILL') {
+          const available = inventory.fullCylinders ?? 0;
+          if (available < item.quantity) throw new BadRequestException(`Insufficient gas refills. Available: ${available}`);
+          lpgComponent = LpgComponent.REFILL;
+        } else if (variant === 'EMPTY_SHELL') {
+          const empties = (inventory.quantity || 0) - (inventory.fullCylinders ?? 0);
+          if (empties < item.quantity) throw new BadRequestException(`Insufficient empty shells. Available: ${empties}`);
+        }
       } else {
-        // STANDARD — check total quantity
-        if (inventory.quantity < item.quantity)
-          throw new BadRequestException(
-            `Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}, Requested: ${item.quantity}`,
-          );
+        if (inventory.quantity < item.quantity) {
+          throw new BadRequestException(`Insufficient stock. Available: ${inventory.quantity}`);
+        }
       }
 
       transferItems.push({
         productId: item.productId,
         quantity: item.quantity,
-        ...(variant !== 'STANDARD' && { variant }),
+        ...(lpgComponent && { lpgComponent }),
       });
     }
 
@@ -195,13 +191,8 @@ export class TransfersService {
     return transfer;
   }
 
-  private async applyItemStockMovement(
-    tx: any,
-    transfer: any,
-    item: any,
-    performedById: string,
-  ) {
-    const variant = item.variant ?? 'STANDARD';
+  private async applyItemStockMovement(tx: any, transfer: any, item: any, performedById: string) {
+    const lpgComponent = item.lpgComponent;
     const isLpg = item.product?.isCylinderTracked;
 
     // ── Deduct from sender ────────────────────────────────────────────────
@@ -212,23 +203,17 @@ export class TransfersService {
     if (sourceInv) {
       let updateData: any = {};
 
-      if (isLpg && (variant === 'REFILL' || variant === 'CYLINDER')) {
-        if ((sourceInv.fullCylinders ?? 0) < item.quantity)
-          throw new BadRequestException('Insufficient full cylinders at source');
-        updateData.fullCylinders = { decrement: item.quantity };
-        // total quantity unchanged (the shell count stays at sender)
-      } else if (isLpg && variant === 'EMPTY_SHELL') {
-        const empties = sourceInv.fullCylinders != null
-          ? sourceInv.quantity - sourceInv.fullCylinders
-          : 0;
-        if (empties < item.quantity)
-          throw new BadRequestException('Insufficient empty shells at source');
-        updateData.quantity = { decrement: item.quantity };
+      if (isLpg) {
+        if (lpgComponent === LpgComponent.CYLINDER) {
+          updateData.quantity = { decrement: item.quantity };
+          updateData.fullCylinders = { decrement: item.quantity };
+        } else if (lpgComponent === LpgComponent.REFILL) {
+          updateData.fullCylinders = { decrement: item.quantity };
+        } else {
+          updateData.quantity = { decrement: item.quantity };
+        }
       } else {
-        if (sourceInv.quantity < item.quantity)
-          throw new BadRequestException('Insufficient stock at source');
         updateData.quantity = { decrement: item.quantity };
-        if (isLpg) updateData.fullCylinders = { decrement: item.quantity };
       }
 
       await tx.inventory.update({ where: { id: sourceInv.id }, data: updateData });
@@ -240,7 +225,7 @@ export class TransfersService {
           referenceId: transfer.id,
           referenceType: 'Transfer',
           performedById,
-          notes: `Transfer ${transfer.transferCode} out (${variant})`,
+          notes: `Transfer ${transfer.transferCode} out${lpgComponent ? ` (${lpgComponent})` : ''}`,
         },
       });
     }
@@ -253,14 +238,17 @@ export class TransfersService {
     if (destInv) {
       let updateData: any = {};
 
-      if (isLpg && (variant === 'REFILL' || variant === 'CYLINDER')) {
-        updateData.fullCylinders = { increment: item.quantity };
-        // total quantity unchanged — shell count unaffected
-      } else if (isLpg && variant === 'EMPTY_SHELL') {
-        updateData.quantity = { increment: item.quantity };
+      if (isLpg) {
+        if (lpgComponent === LpgComponent.CYLINDER) {
+          updateData.quantity = { increment: item.quantity };
+          updateData.fullCylinders = { increment: item.quantity };
+        } else if (lpgComponent === LpgComponent.REFILL) {
+          updateData.fullCylinders = { increment: item.quantity };
+        } else {
+          updateData.quantity = { increment: item.quantity };
+        }
       } else {
         updateData.quantity = { increment: item.quantity };
-        if (isLpg) updateData.fullCylinders = { increment: item.quantity };
       }
 
       await tx.inventory.update({ where: { id: destInv.id }, data: updateData });
@@ -272,18 +260,25 @@ export class TransfersService {
           referenceId: transfer.id,
           referenceType: 'Transfer',
           performedById,
-          notes: `Transfer ${transfer.transferCode} in (${variant})`,
+          notes: `Transfer ${transfer.transferCode} in${lpgComponent ? ` (${lpgComponent})` : ''}`,
         },
       });
     } else {
-      // Create inventory record if receiver doesn't have this product yet
       const createData: any = { branchId: transfer.toBranchId, productId: item.productId };
-      if (isLpg && (variant === 'REFILL' || variant === 'CYLINDER')) {
-        createData.quantity = 0;
-        createData.fullCylinders = item.quantity;
+      
+      if (isLpg) {
+        if (lpgComponent === LpgComponent.CYLINDER) {
+          createData.quantity = item.quantity;
+          createData.fullCylinders = item.quantity;
+        } else if (lpgComponent === LpgComponent.REFILL) {
+          createData.quantity = 0;
+          createData.fullCylinders = item.quantity;
+        } else {
+          createData.quantity = item.quantity;
+          createData.fullCylinders = 0;
+        }
       } else {
         createData.quantity = item.quantity;
-        if (isLpg) createData.fullCylinders = item.quantity;
       }
       await tx.inventory.create({ data: createData });
     }
@@ -306,10 +301,11 @@ export class TransfersService {
 
   private assertIsReceivingManager(transfer: { toBranchId: string }, user: AuthUser) {
     const canRespond =
-      (user.role === UserRole.BRANCH_MANAGER || user.role === UserRole.SUPER_ADMIN) &&
-      user.branchId === transfer.toBranchId;
+      (user.role === UserRole.BRANCH_MANAGER || user.role === UserRole.SUPER_ADMIN || user.role === UserRole.OVERALL_MANAGER) &&
+      (user.role !== UserRole.BRANCH_MANAGER || user.branchId === transfer.toBranchId);
+    
     if (!canRespond)
-      throw new ForbiddenException('Only the receiving branch manager can act on this transfer');
+      throw new ForbiddenException('Only the receiving branch manager or an admin can act on this transfer');
   }
 
   async approveItem(transferId: string, itemId: string, user: AuthUser) {
@@ -351,8 +347,7 @@ export class TransfersService {
   }
 
   async rejectItem(transferId: string, itemId: string, user: AuthUser, rejectionReason: string) {
-    if (!rejectionReason?.trim())
-      throw new BadRequestException('A rejection reason is required');
+    if (!rejectionReason?.trim()) throw new BadRequestException('A rejection reason is required');
 
     const transfer = await this.prisma.transfer.findUnique({
       where: { id: transferId },
@@ -396,8 +391,7 @@ export class TransfersService {
     this.assertIsReceivingManager(transfer, user);
 
     const pending = transfer.items.filter((i) => i.status === TransferItemStatus.PENDING);
-    if (pending.length === 0)
-      throw new BadRequestException('No pending items left to approve');
+    if (pending.length === 0) throw new BadRequestException('No pending items left to approve');
 
     await this.prisma.$transaction(async (tx) => {
       for (const item of pending) {
@@ -424,8 +418,7 @@ export class TransfersService {
   }
 
   async reject(id: string, user: AuthUser, rejectionReason: string) {
-    if (!rejectionReason?.trim())
-      throw new BadRequestException('A rejection reason is required');
+    if (!rejectionReason?.trim()) throw new BadRequestException('A rejection reason is required');
 
     const transfer = await this.prisma.transfer.findUnique({
       where: { id },
@@ -435,8 +428,7 @@ export class TransfersService {
     this.assertIsReceivingManager(transfer, user);
 
     const pending = transfer.items.filter((i) => i.status === TransferItemStatus.PENDING);
-    if (pending.length === 0)
-      throw new BadRequestException('No pending items left to reject');
+    if (pending.length === 0) throw new BadRequestException('No pending items left to reject');
 
     await this.prisma.transferItem.updateMany({
       where: { id: { in: pending.map((i) => i.id) } },
