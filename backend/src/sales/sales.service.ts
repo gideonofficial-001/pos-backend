@@ -38,80 +38,31 @@ export class SalesService {
       );
     }
 
-    // ── 1. VALIDATION ──────────────────────────────────────────────────────
-    for (const item of items) {
-      const inventory = await this.prisma.inventory.findUnique({
-        where: {
-          branchId_productId: { branchId, productId: item.productId },
-        },
-        include: { product: true },
-      });
-
-      if (!inventory) {
-        throw new BadRequestException(
-          'Product not found in branch inventory',
-        );
-      }
-
-      const variant = this.resolveVariant(
-        inventory.product.type,
-        item.lpgVariant,
-      );
+          // 1. VALIDATION PHASE
+      const variant = this.resolveVariant(inventory.product.type, item.lpgVariant);
+      const availableEmpty = inventory.fullCylinders != null ? inventory.quantity - inventory.fullCylinders : 0;
 
       if (variant === LpgSaleVariant.EMPTY_SHELL) {
-        const availableEmpty =
-          inventory.fullCylinders != null
-            ? inventory.quantity - inventory.fullCylinders
-            : 0;
         if (availableEmpty < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient empty shells for ${inventory.product.name}. Available: ${availableEmpty}`,
-          );
+          throw new BadRequestException(`Insufficient empty shells for ${inventory.product.name}. Available: ${availableEmpty}`);
         }
         if (inventory.product.emptyPrice == null) {
-          throw new BadRequestException(
-            `Empty shell price is not configured for ${inventory.product.name}`,
-          );
+          throw new BadRequestException(`Empty shell price is not configured for ${inventory.product.name}`);
         }
-      } else if (
-        variant === LpgSaleVariant.REFILL ||
-        inventory.product.type === ProductType.LPG_CYLINDER
-      ) {
-        // Needs full cylinders only
+      } else if (variant === LpgSaleVariant.REFILL || variant === LpgSaleVariant.COMPLETE_SET || inventory.product.type === ProductType.LPG_CYLINDER) {
+        // Notice we only check fullCylinders here! Empty shells are irrelevant for complete sets.
         if ((inventory.fullCylinders ?? 0) < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders ?? 0}`,
-          );
+          throw new BadRequestException(`Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders ?? 0}`);
         }
-      } else if (variant === LpgSaleVariant.COMPLETE_SET) {
-        // Needs BOTH a full cylinder AND an empty shell per unit
-        const fullAvailable = inventory.fullCylinders ?? 0;
-        const emptyAvailable = inventory.fullCylinders != null
-          ? inventory.quantity - inventory.fullCylinders
-          : 0;
-        if (fullAvailable < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient full cylinders for ${inventory.product.name}. Available: ${fullAvailable}`,
-          );
-        }
-        if (emptyAvailable < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient empty shells for ${inventory.product.name} (needed for complete set). Available: ${emptyAvailable}`,
-          );
-        }
-        if (inventory.product.emptyPrice == null) {
-          throw new BadRequestException(
-            `Empty shell price is not configured for ${inventory.product.name}`,
-          );
+        if (variant === LpgSaleVariant.COMPLETE_SET && inventory.product.emptyPrice == null) {
+          throw new BadRequestException(`Empty shell price is not configured for ${inventory.product.name}`);
         }
       } else {
         if (inventory.quantity < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}`,
-          );
+          throw new BadRequestException(`Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}`);
         }
       }
-    }
+
 
     // ── 2. CALCULATION ─────────────────────────────────────────────────────
     let subtotal = 0;
