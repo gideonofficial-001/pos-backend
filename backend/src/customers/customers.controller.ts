@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { CustomersService } from './customers.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -61,5 +61,12 @@ export class CustomersController {
   @ApiOperation({ summary: 'Toggle customer status' })
   async toggleStatus(@Param('id') id: string) {
     return this.customersService.toggleStatus(id);
+  }
+
+  @Delete(':id')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Delete customer (Admin only)' })
+  async remove(@Param('id') id: string) {
+    return this.customersService.remove(id);
   }
 }
