@@ -16,7 +16,6 @@ export class CustomersService {
     const existing = await this.prisma.customer.findUnique({ where: { phone: data.phone } });
     if (existing) throw new ConflictException('Customer with this phone number already exists');
 
-    // email is not @unique on Customer — must use findFirst
     if (data.email) {
       const existingEmail = await this.prisma.customer.findFirst({ where: { email: data.email } });
       if (existingEmail) throw new ConflictException('Customer with this email already exists');
@@ -69,6 +68,19 @@ export class CustomersService {
     const customer = await this.prisma.customer.findUnique({ where: { id } });
     if (!customer) throw new NotFoundException('Customer not found');
     return this.prisma.customer.update({ where: { id }, data: { isActive: !customer.isActive } });
+  }
+
+  async remove(id: string) {
+    const customer = await this.prisma.customer.findUnique({ where: { id } });
+    if (!customer) throw new NotFoundException('Customer not found');
+
+    // Safety check: Prevent deletion if they have transaction history
+    const hasSales = await this.prisma.sale.findFirst({ where: { customerId: id } });
+    if (hasSales) {
+      throw new ConflictException('Cannot delete a customer with transaction history. Consider toggling their status to inactive instead.');
+    }
+
+    return this.prisma.customer.delete({ where: { id } });
   }
 
   async getOutstandingBalances() {
