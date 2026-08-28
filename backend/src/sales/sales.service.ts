@@ -38,7 +38,17 @@ export class SalesService {
       );
     }
 
-          // 1. VALIDATION PHASE
+    // ── 1. VALIDATION PHASE ────────────────────────────────────────────────
+    for (const item of items) {
+      const inventory = await this.prisma.inventory.findUnique({
+        where: { branchId_productId: { branchId, productId: item.productId } },
+        include: { product: true },
+      });
+
+      if (!inventory) {
+        throw new BadRequestException(`Product not found in branch inventory`);
+      }
+
       const variant = this.resolveVariant(inventory.product.type, item.lpgVariant);
       const availableEmpty = inventory.fullCylinders != null ? inventory.quantity - inventory.fullCylinders : 0;
 
@@ -62,6 +72,7 @@ export class SalesService {
           throw new BadRequestException(`Insufficient stock for ${inventory.product.name}. Available: ${inventory.quantity}`);
         }
       }
+    }
 
 
     // ── 2. CALCULATION ─────────────────────────────────────────────────────
