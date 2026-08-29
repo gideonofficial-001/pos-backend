@@ -32,8 +32,6 @@ export class DevicesService {
   }
 
   async validateDevice(userId: string, fingerprint: string) {
-    // Scope to this specific user — same fingerprint from a different user
-    // is a different device record after the schema @@unique([userId, fingerprint]) fix
     const device = await this.prisma.device.findFirst({
       where: { userId, fingerprint },
     });
@@ -60,23 +58,17 @@ export class DevicesService {
       country?: string;
     },
   ) {
-    // Look for an existing record belonging to THIS user on this fingerprint.
-    // Using findFirst (not findUnique) because fingerprint is no longer globally
-    // unique — it is unique per-user after the @@unique([userId, fingerprint]) migration.
     const existingDevice = await this.prisma.device.findFirst({
       where: { userId, fingerprint },
     });
 
     if (existingDevice) {
-      // This user already has a device record for this fingerprint (e.g. still
-      // PENDING from a previous attempt). Return it without creating a duplicate.
       return { requestId: existingDevice.id, status: existingDevice.status };
     }
 
-    // A different user may have the same fingerprint (shared office computer).
-    // That is fine — each user gets their own device record.
-
-    // Enforce 1 approved device per user
+    // NOTE: The strict 1-device limit has been removed so the PWA and new browsers
+    // can successfully request access and go into the PENDING state for the Admin to review.
+    /*
     const approvedCount = await this.prisma.device.count({
       where: { userId, status: DeviceStatus.APPROVED },
     });
@@ -86,6 +78,7 @@ export class DevicesService {
         'Security limit reached: user already has an active approved device.',
       );
     }
+    */
 
     const device = await this.prisma.device.create({
       data: {
@@ -146,7 +139,6 @@ export class DevicesService {
         '[DevicesService] No SUPER_ADMIN users found — device auth notification not sent!',
       );
     } else {
-      // Wrap in try-catch so a notification failure never blocks the login response
       try {
         await Promise.all(
           admins.map((admin) =>
@@ -167,7 +159,6 @@ export class DevicesService {
         );
       }
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     return { requestId: device.id, status: DeviceStatus.PENDING };
   }
@@ -180,7 +171,6 @@ export class DevicesService {
 
     if (!device) throw new NotFoundException('Device not found');
 
-    // 6-digit code stored as bcrypt hash in requestCode
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const hashedCode = await bcrypt.hash(code, 10);
     const expiry = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
@@ -229,7 +219,6 @@ export class DevicesService {
       }
     }
 
-    // Audit log — wrapped so a DB constraint on approvedById never blocks the response
     try {
       await this.auditLogsService.create({
         userId: approvedById ?? undefined,
@@ -242,12 +231,11 @@ export class DevicesService {
       this.logger.warn(`[DevicesService] Audit log failed (non-blocking): ${auditErr.message}`);
     }
 
-    // Always return the plain code so admin can share it directly when email fails
     return {
       message: emailSent
         ? 'Device approved — authorization code sent to user email'
         : 'Device approved — email not sent, use the code below',
-      code,             // plain 6-digit code for admin to share directly
+      code,
       emailSent,
       emailError,
       userEmail: device.user.email,
@@ -280,7 +268,6 @@ export class DevicesService {
       return { valid: false, message: 'Invalid authorization code' };
     }
 
-    // Clear code after single use
     await this.prisma.device.update({
       where: { id: requestId },
       data: { requestCode: null, requestCodeExpiry: null },
