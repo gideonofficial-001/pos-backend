@@ -8,6 +8,7 @@ import {
   Param,
   Query,
   UseGuards,
+  Request
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { UsersService } from './users.service';
@@ -56,7 +57,20 @@ export class UsersController {
     return this.usersService.getStats();
   }
 
-  // ── New: Login activity — MUST be declared before /:id ───────────────────
+  // ── New: User Self-Management Routes — MUST BE BEFORE /:id ────────────────
+  @Patch('me/profile')
+  @ApiOperation({ summary: 'Update own profile' })
+  updateOwnProfile(@Request() req, @Body() updateData: { firstName?: string; lastName?: string }) {
+    return this.usersService.updateProfile(req.user.userId, updateData);
+  }
+
+  @Patch('me/password')
+  @ApiOperation({ summary: 'Update own password' })
+  updateOwnPassword(@Request() req, @Body() body: any) {
+    return this.usersService.updatePassword(req.user.userId, body.currentPassword, body.newPassword);
+  }
+
+  // ── Login activity — MUST be declared before /:id ───────────────────
 
   @Get('login-activity/suspicious')
   @Roles(UserRole.SUPER_ADMIN)
