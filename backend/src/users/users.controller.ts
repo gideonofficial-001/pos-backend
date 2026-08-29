@@ -8,16 +8,23 @@ import {
   Param,
   Query,
   UseGuards,
-  Request
+  Request,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import {
+  ApiTags,
+  ApiOperation,
+  ApiBearerAuth,
+} from '@nestjs/swagger';
+
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { GetUser } from '../auth/decorators/get-user.decorator';
+
 import { PrismaService } from '../prisma/prisma.service';
 import { UserRole } from '@prisma/client';
 
@@ -27,11 +34,13 @@ import { UserRole } from '@prisma/client';
 @ApiBearerAuth()
 export class UsersController {
   constructor(
-    private usersService: UsersService,
-    private prisma: PrismaService,
+    private readonly usersService: UsersService,
+    private readonly prisma: PrismaService,
   ) {}
 
-  // ── Existing CRUD ─────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // CREATE USER
+  // ─────────────────────────────────────────────────────────────────────────
 
   @Post()
   @Roles(UserRole.SUPER_ADMIN)
@@ -43,12 +52,20 @@ export class UsersController {
     return this.usersService.create(createUserDto, userId);
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET ALL USERS
+  // ─────────────────────────────────────────────────────────────────────────
+
   @Get()
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
   @ApiOperation({ summary: 'Get all users' })
   async findAll() {
     return this.usersService.findAll();
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // USER STATISTICS
+  // ─────────────────────────────────────────────────────────────────────────
 
   @Get('stats')
   @Roles(UserRole.SUPER_ADMIN)
@@ -57,30 +74,70 @@ export class UsersController {
     return this.usersService.getStats();
   }
 
-  // ── New: User Self-Management Routes — MUST BE BEFORE /:id ────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // SELF MANAGEMENT
+  // These routes MUST come before /:id
+  // ─────────────────────────────────────────────────────────────────────────
+
   @Patch('me/profile')
   @ApiOperation({ summary: 'Update own profile' })
-  updateOwnProfile(@Request() req, @Body() updateData: { firstName?: string; lastName?: string }) {
-    return this.usersService.updateProfile(req.user.userId, updateData);
+  async updateOwnProfile(
+    @Request() req,
+    @Body() updateData: {
+      firstName?: string;
+      lastName?: string;
+    },
+  ) {
+    return this.usersService.updateProfile(
+      req.user.userId,
+      updateData,
+    );
   }
 
   @Patch('me/password')
   @ApiOperation({ summary: 'Update own password' })
-  updateOwnPassword(@Request() req, @Body() body: any) {
-    return this.usersService.updatePassword(req.user.userId, body.currentPassword, body.newPassword);
+  async updateOwnPassword(
+    @Request() req,
+    @Body()
+    body: {
+      currentPassword: string;
+      newPassword: string;
+    },
+  ) {
+    return this.usersService.updatePassword(
+      req.user.userId,
+      body.currentPassword,
+      body.newPassword,
+    );
   }
 
-  // ── Login activity — MUST be declared before /:id ───────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // LOGIN ACTIVITY
+  // These routes MUST come before /:id
+  // ─────────────────────────────────────────────────────────────────────────
 
   @Get('login-activity/suspicious')
   @Roles(UserRole.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Get suspicious login activity across all users' })
-  async getSuspiciousLogins(@Query('days') days = '7') {
-    const since = new Date(Date.now() - +days * 24 * 60 * 60 * 1000);
+  @ApiOperation({
+    summary: 'Get suspicious login activity across all users',
+  })
+  async getSuspiciousLogins(
+    @Query('days') days = '7',
+  ) {
+    const since = new Date(
+      Date.now() - +days * 24 * 60 * 60 * 1000,
+    );
 
     return this.prisma.loginLocation.findMany({
-      where: { isSuspicious: true, createdAt: { gte: since } },
-      orderBy: { createdAt: 'desc' },
+      where: {
+        isSuspicious: true,
+        createdAt: {
+          gte: since,
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
       include: {
         user: {
           select: {
@@ -89,7 +146,11 @@ export class UsersController {
             lastName: true,
             email: true,
             role: true,
-            branch: { select: { name: true } },
+            branch: {
+              select: {
+                name: true,
+              },
+            },
           },
         },
       },
@@ -98,19 +159,29 @@ export class UsersController {
 
   @Get('login-activity/all')
   @Roles(UserRole.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Get all login activity' })
+  @ApiOperation({
+    summary: 'Get all login activity',
+  })
   async getAllLoginActivity(
     @Query('days') days = '7',
     @Query('userId') userId?: string,
   ) {
-    const since = new Date(Date.now() - +days * 24 * 60 * 60 * 1000);
+    const since = new Date(
+      Date.now() - +days * 24 * 60 * 60 * 1000,
+    );
 
     return this.prisma.loginLocation.findMany({
       where: {
-        createdAt: { gte: since },
-        ...(userId && { userId }),
+        createdAt: {
+          gte: since,
+        },
+        ...(userId && {
+          userId,
+        }),
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: {
+        createdAt: 'desc',
+      },
       include: {
         user: {
           select: {
@@ -119,34 +190,60 @@ export class UsersController {
             lastName: true,
             email: true,
             role: true,
-            branch: { select: { name: true } },
+            branch: {
+              select: {
+                name: true,
+              },
+            },
           },
         },
       },
     });
   }
 
-  // ── Existing :id routes — MUST come after specific named routes above ─────
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET USER BY ID
+  // MUST come after specific named routes
+  // ─────────────────────────────────────────────────────────────────────────
 
   @Get(':id')
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  @ApiOperation({ summary: 'Get user by ID' })
-  async findOne(@Param('id') id: string) {
+  @ApiOperation({
+    summary: 'Get user by ID',
+  })
+  async findOne(
+    @Param('id') id: string,
+  ) {
     return this.usersService.findOne(id);
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // GET USER LOGIN HISTORY
+  // ─────────────────────────────────────────────────────────────────────────
+
   @Get(':id/login-history')
   @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER)
-  @ApiOperation({ summary: 'Get login history for a specific user' })
+  @ApiOperation({
+    summary: 'Get login history for a specific user',
+  })
   async getUserLoginHistory(
     @Param('id') userId: string,
     @Query('days') days = '30',
   ) {
-    const since = new Date(Date.now() - +days * 24 * 60 * 60 * 1000);
+    const since = new Date(
+      Date.now() - +days * 24 * 60 * 60 * 1000,
+    );
 
     const history = await this.prisma.loginLocation.findMany({
-      where: { userId, createdAt: { gte: since } },
-      orderBy: { createdAt: 'desc' },
+      where: {
+        userId,
+        createdAt: {
+          gte: since,
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
       include: {
         user: {
           select: {
@@ -154,7 +251,11 @@ export class UsersController {
             lastName: true,
             email: true,
             role: true,
-            branch: { select: { name: true } },
+            branch: {
+              select: {
+                name: true,
+              },
+            },
           },
         },
       },
@@ -164,8 +265,10 @@ export class UsersController {
       id: login.id,
       date: login.createdAt,
       status: login.status,
+
       location:
-        login.latitude && login.longitude
+        login.latitude != null &&
+        login.longitude != null
           ? {
               latitude: login.latitude,
               longitude: login.longitude,
@@ -175,6 +278,7 @@ export class UsersController {
               country: login.country,
             }
           : null,
+
       ipAddress: login.ipAddress,
       deviceType: login.deviceType,
       isSuspicious: login.isSuspicious,
@@ -183,25 +287,52 @@ export class UsersController {
     }));
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // UPDATE USER
+  // ─────────────────────────────────────────────────────────────────────────
+
   @Patch(':id')
   @Roles(UserRole.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Update user (Admin only)' })
+  @ApiOperation({
+    summary: 'Update user (Admin only)',
+  })
   async update(
     @Param('id') id: string,
     @Body() updateUserDto: UpdateUserDto,
     @GetUser('userId') userId: string,
   ) {
-    return this.usersService.update(id, updateUserDto, userId);
+    return this.usersService.update(
+      id,
+      updateUserDto,
+      userId,
+    );
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // DELETE USER
+  // ─────────────────────────────────────────────────────────────────────────
 
   @Delete(':id')
   @Roles(UserRole.SUPER_ADMIN)
-  @ApiOperation({ summary: 'Delete user with confirmation (Admin only)' })
+  @ApiOperation({
+    summary: 'Delete user with confirmation (Admin only)',
+  })
   async remove(
     @Param('id') id: string,
     @Query('confirmation') confirmation: string,
     @GetUser('userId') userId: string,
   ) {
-    return this.usersService.remove(id, confirmation, userId);
+    // IMPORTANT:
+    // UsersService.remove() expects:
+    // remove(id, performedBy, confirmationText)
+    //
+    // Therefore the correct order is:
+    // remove(id, userId, confirmation)
+
+    return this.usersService.remove(
+      id,
+      userId,
+      confirmation,
+    );
   }
 }
