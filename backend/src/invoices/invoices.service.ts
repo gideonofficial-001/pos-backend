@@ -1,245 +1,149 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import api, { customersApi } from '@/api'
-import { useAuthStore } from '@/store'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
-import { formatCurrency, formatDate } from '@/lib/utils'
-import { toast } from 'sonner'
-import { FileText, Phone, Users, Copy, CheckCircle, Store } from 'lucide-react'
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { InvoiceStatus } from '@prisma/client';
+import { CreateInvoiceDto } from './dto/create-invoice.dto';
 
-const Invoices = () => {
-  const { user } = useAuthStore()
-  const isAdmin = user?.role === 'SUPER_ADMIN' || user?.role === 'OVERALL_MANAGER'
-  
-  const queryClient = useQueryClient()
-  
-  const [showCustomersModal, setShowCustomersModal] = useState(false)
-  const [selectedPaymentInvoice, setSelectedPaymentInvoice] = useState<any>(null)
-  const [paymentAmount, setPaymentAmount] = useState('')
+@Injectable()
+export class InvoicesService {
+  constructor(
+    private prisma: PrismaService,
+    private notificationsService: NotificationsService,
+  ) {}
 
-  const { data: invoices } = useQuery({
-    queryKey: ['invoices'],
-    queryFn: async () => {
-      const response = await api.get('/invoices')
-      return response.data
-    },
-  })
+  async create(createInvoiceDto: CreateInvoiceDto, user: any) {
+    const { branchId, customerId, saleId, subtotal, discount = 0, dueDate, notes } = createInvoiceDto;
 
-  const { data: customers = [] } = useQuery({
-    queryKey: ['customers'],
-    queryFn: async () => {
-      try {
-        const response = await customersApi.getAll()
-        const data = Array.isArray(response.data) ? response.data : (response.data?.data || [])
-        return data.filter((c: any) => c.isActive)
-      } catch (error) {
-        return []
-      }
-    }
-  })
-
-  const recordPaymentMutation = useMutation({
-    mutationFn: (data: { id: string, amount: number }) => api.patch(`/invoices/${data.id}/payment`, { amount: data.amount }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['invoices'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
-      setSelectedPaymentInvoice(null)
-      setPaymentAmount('')
-      toast.success('Payment recorded successfully')
-    },
-    onError: (error: any) => {
-      toast.error(error.response?.data?.message || 'Failed to record payment')
-    },
-  })
-
-  const handlePaymentSubmit = (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!selectedPaymentInvoice || !paymentAmount) return
-    
-    const amount = Number(paymentAmount)
-    if (amount <= 0 || amount > Number(selectedPaymentInvoice.balance)) {
-      toast.error(`Please enter a valid amount up to ${formatCurrency(selectedPaymentInvoice.balance)}`)
-      return
+    if (customerId) {
+      const customer = await this.prisma.customer.findUnique({ where: { id: customerId } });
+      if (!customer) throw new NotFoundException('Customer not found');
     }
 
-    recordPaymentMutation.mutate({ id: selectedPaymentInvoice.id, amount })
+    const count = await this.prisma.invoice.count();
+    const invoiceCode = `INV-${String(count + 1).padStart(5, '0')}`;
+
+    const total = Number(subtotal) - Number(discount);
+    const balance = total; // starts fully unpaid
+
+    const invoice = await this.prisma.invoice.create({
+      data: {
+        invoiceCode,
+        branchId,
+        userId: user.userId,
+        customerId,
+        saleId,
+        subtotal,
+        discount,
+        total,
+        amountPaid: 0,
+        balance,
+        dueDate: dueDate ? new Date(dueDate) : null,
+        notes,
+      },
+      include: {
+        branch: { select: { name: true } },
+        customer: true,
+        user: { select: { firstName: true, lastName: true } },
+      },
+    });
+
+    await this.notificationsService.create({
+      type: 'INVOICE_CREATED',
+      title: 'New Invoice Created',
+      message: `Invoice ${invoiceCode} for KES ${total.toFixed(2)}`,
+      userId: user.userId,
+      entityId: invoice.id,
+      entityType: 'Invoice',
+    });
+
+    await this.prisma.activityFeed.create({
+      data: {
+        type: 'INVOICE_CREATED',
+        branchId,
+        title: 'Invoice Created',
+        message: `Invoice ${invoiceCode} for KES ${total.toFixed(2)}`,
+        entityId: invoice.id,
+        entityType: 'Invoice',
+        visibleToBranch: true,
+      },
+    });
+
+    return invoice;
   }
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'PAID': return <Badge variant="default" className="bg-emerald-500 hover:bg-emerald-600">Paid</Badge>
-      case 'PENDING': return <Badge variant="outline" className="text-amber-600 border-amber-300">Pending</Badge>
-      case 'SENT': return <Badge variant="secondary">Sent</Badge>
-      case 'OVERDUE': return <Badge variant="destructive">Overdue</Badge>
-      default: return <Badge>{status}</Badge>
+  async findAll(query?: { branchId?: string; status?: string; overdue?: boolean; user?: any }) {
+    const where: any = {};
+    if (query?.branchId) where.branchId = query.branchId;
+    if (query?.status) where.status = query.status;
+    if (query?.overdue) {
+      where.status = { in: ['PENDING', 'SENT'] };
+      where.dueDate = { lt: new Date() };
     }
+
+    return this.prisma.invoice.findMany({
+      where,
+      include: {
+        branch: { select: { id: true, name: true, code: true } },
+        customer: true,
+        user: { select: { firstName: true, lastName: true } },
+        sale: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   }
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text)
-    toast.success('Phone number copied!')
+  async findOne(id: string) {
+    const invoice = await this.prisma.invoice.findUnique({
+      where: { id },
+      include: {
+        branch: true,
+        customer: true,
+        user: { select: { firstName: true, lastName: true } },
+        sale: { include: { saleItems: { include: { product: true } } } },
+      },
+    });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    return invoice;
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">{isAdmin ? 'All Branch Invoices' : 'Invoices'}</h1>
-          <p className="text-muted-foreground">Manage customer invoices and payments</p>
-        </div>
-        <Button onClick={() => setShowCustomersModal(true)} variant="outline" className="bg-white">
-          <Users className="w-4 h-4 mr-2" />
-          View Customers
-        </Button>
-      </div>
+  async updateStatus(id: string, status: InvoiceStatus, userId: string) {
+    const invoice = await this.prisma.invoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException('Invoice not found');
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {invoices?.map((invoice: any) => (
-          <Card key={invoice.id} className="hover:shadow-md transition-shadow bg-white">
-            <CardContent className="p-5">
-              <div className="flex items-start justify-between mb-3">
-                <div>
-                  <h3 className="font-bold text-lg">{invoice.invoiceCode}</h3>
-                  <p className="text-xs text-muted-foreground">{formatDate(invoice.createdAt)}</p>
-                </div>
-                <div className="flex flex-col items-end gap-1">
-                  {getStatusBadge(invoice.status)}
-                  {isAdmin && invoice.branch && (
-                    <Badge variant="outline" className="bg-slate-50 text-[10px] py-0">
-                      <Store className="w-3 h-3 mr-1" /> {invoice.branch.name}
-                    </Badge>
-                  )}
-                </div>
-              </div>
+    const updateData: any = { status };
 
-              <div className="space-y-2 mt-4 bg-muted/30 p-3 rounded-lg">
-                <div className="flex items-center gap-2 text-sm font-semibold">
-                  <FileText className="w-4 h-4 text-muted-foreground" />
-                  {invoice.customer?.name || 'Unknown Customer'}
-                </div>
-                <div className="flex items-center justify-between gap-2 text-sm text-muted-foreground pl-6">
-                  <span className="flex items-center gap-2">
-                    <Phone className="w-3 h-3" />
-                    {invoice.customer?.phone || 'No phone'}
-                  </span>
-                </div>
-              </div>
+    if (status === InvoiceStatus.PAID) {
+      updateData.amountPaid = invoice.total;
+      updateData.balance = 0;
+      updateData.paidAt = new Date();
+    }
 
-              <div className="mt-4 pt-4 border-t space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Invoice Total</span>
-                  <span className="font-semibold">{formatCurrency(invoice.total)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Amount Paid</span>
-                  <span className="font-semibold text-emerald-600">{formatCurrency(invoice.amountPaid)}</span>
-                </div>
-                <div className="flex justify-between items-center mt-2 pt-2 border-t border-dashed">
-                  <span className="text-sm font-bold text-muted-foreground">Balance</span>
-                  <span className={`text-lg font-black ${Number(invoice.balance) > 0 ? 'text-destructive' : 'text-emerald-600'}`}>
-                    {formatCurrency(invoice.balance)}
-                  </span>
-                </div>
-                <p className="text-xs text-muted-foreground text-right mt-1">Due: {invoice.dueDate ? formatDate(invoice.dueDate) : 'On Receipt'}</p>
-              </div>
+    return this.prisma.invoice.update({
+      where: { id },
+      data: updateData,
+      include: { branch: true, customer: true },
+    });
+  }
 
-              {Number(invoice.balance) > 0 && invoice.status !== 'PAID' && (
-                <Button 
-                  className="w-full mt-4" 
-                  variant="default"
-                  onClick={() => setSelectedPaymentInvoice(invoice)}
-                >
-                  <CheckCircle className="w-4 h-4 mr-2" />
-                  Record Payment
-                </Button>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+  async getOverdueInvoices() {
+    return this.prisma.invoice.findMany({
+      where: { status: { in: ['PENDING', 'SENT'] }, dueDate: { lt: new Date() } },
+      include: { branch: { select: { name: true } }, customer: true },
+      orderBy: { dueDate: 'asc' },
+    });
+  }
 
-      {invoices?.length === 0 && (
-        <div className="text-center py-12 text-muted-foreground bg-white border rounded-xl shadow-sm">
-          <FileText className="w-12 h-12 mx-auto mb-4 opacity-30" />
-          <p>No invoices found in the system.</p>
-        </div>
-      )}
+  async getInvoiceSummary() {
+    const [total, paid, pending, overdue, totalAmount] = await Promise.all([
+      this.prisma.invoice.count(),
+      this.prisma.invoice.count({ where: { status: 'PAID' } }),
+      this.prisma.invoice.count({ where: { status: { in: ['PENDING', 'SENT'] } } }),
+      this.prisma.invoice.count({
+        where: { status: { in: ['PENDING', 'SENT'] }, dueDate: { lt: new Date() } },
+      }),
+      this.prisma.invoice.aggregate({ _sum: { total: true } }),
+    ]);
 
-      {/* View Customers Directory Modal */}
-      <Dialog open={showCustomersModal} onOpenChange={setShowCustomersModal}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2"><Users className="w-5 h-5"/> Customer Directory</DialogTitle>
-            <DialogDescription>Read-only list of active customers. Click the copy icon to copy their phone number.</DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[60vh] overflow-y-auto pr-2 space-y-3 mt-2">
-            {customers.length === 0 ? (
-              <p className="text-center text-sm text-muted-foreground py-4">No active customers found.</p>
-            ) : (
-              customers.map((c: any) => (
-                <div key={c.id} className="flex items-center justify-between p-3 border rounded-lg bg-slate-50">
-                  <div>
-                    <p className="font-semibold text-sm">{c.name}</p>
-                    <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                      <Phone className="w-3 h-3" /> {c.phone}
-                    </p>
-                  </div>
-                  <Button variant="ghost" size="icon" onClick={() => copyToClipboard(c.phone)} title="Copy Phone Number">
-                    <Copy className="w-4 h-4 text-muted-foreground" />
-                  </Button>
-                </div>
-              ))
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" className="w-full" onClick={() => setShowCustomersModal(false)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Record Payment Modal */}
-      <Dialog open={!!selectedPaymentInvoice} onOpenChange={() => { setSelectedPaymentInvoice(null); setPaymentAmount(''); }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Record Payment</DialogTitle>
-            <DialogDescription>
-              Recording a payment for {selectedPaymentInvoice?.invoiceCode}. When the balance reaches 0, the invoice will automatically convert to PAID.
-            </DialogDescription>
-          </DialogHeader>
-          <form onSubmit={handlePaymentSubmit} className="space-y-4 pt-4">
-            <div className="p-3 bg-muted rounded-lg flex justify-between items-center text-sm">
-              <span className="font-medium">Current Balance:</span>
-              <span className="font-bold text-destructive">{selectedPaymentInvoice ? formatCurrency(selectedPaymentInvoice.balance) : ''}</span>
-            </div>
-            
-            <div className="space-y-2">
-              <Label>Payment Amount (KES) *</Label>
-              <Input 
-                type="number" 
-                autoFocus
-                placeholder="Enter amount paid..." 
-                value={paymentAmount} 
-                onChange={e => setPaymentAmount(e.target.value)} 
-                required 
-              />
-            </div>
-            
-            <DialogFooter className="pt-2">
-              <Button type="button" variant="outline" onClick={() => { setSelectedPaymentInvoice(null); setPaymentAmount(''); }}>Cancel</Button>
-              <Button type="submit" disabled={recordPaymentMutation.isPending || !paymentAmount}>
-                {recordPaymentMutation.isPending ? 'Processing...' : 'Confirm Payment'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </div>
-  )
+    return { total, paid, pending, overdue, totalAmount: totalAmount._sum.total || 0 };
+  }
 }
-
-export default Invoices
