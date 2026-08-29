@@ -120,8 +120,9 @@ export class SalesService {
         () => chars.charAt(Math.floor(Math.random() * chars.length)),
       ).join('');
     } while (await this.prisma.sale.findUnique({ where: { saleCode } }));
+  }
 
-    // ── 3. TRANSACTION ─────────────────────────────────────────────────────
+        // ── 3. TRANSACTION ─────────────────────────────────────────────────────
     const sale = await this.prisma.$transaction(async (tx) => {
       const newSale = await tx.sale.create({
         data: {
@@ -144,6 +145,30 @@ export class SalesService {
         },
       });
 
+      // ---- NEW: AUTOMATIC INVOICE GENERATION ----
+      if (type === SaleType.INVOICE && customerId) {
+        const invCount = await tx.invoice.count();
+        const invoiceCode = `INV-${String(invCount + 1).padStart(5, '0')}`;
+        
+        await tx.invoice.create({
+          data: {
+            invoiceCode,
+            branchId,
+            customerId,
+            userId: user.userId,
+            saleId: newSale.id,
+            status: 'PENDING',
+            subtotal,
+            discount: finalDiscount,
+            total,
+            balance: total,
+            dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Default due date 7 days
+            notes: notes || 'Auto-generated from POS checkout'
+          }
+        });
+      }
+      // -------------------------------------------
+
       for (const item of items) {
         const product = await tx.product.findUnique({
           where: { id: item.productId },
@@ -155,9 +180,7 @@ export class SalesService {
         });
         const variant = this.resolveVariant(product.type, item.lpgVariant);
 
-        const updateData: any = {
-          totalSold: { increment: item.quantity },
-        };
+        const updateData: any = { totalSold: { increment: item.quantity } };
         let quantityDelta = -item.quantity;
 
         if (product.type === ProductType.LPG_REFILL) {
@@ -178,9 +201,7 @@ export class SalesService {
         }
 
         await tx.inventory.update({
-          where: {
-            branchId_productId: { branchId, productId: item.productId },
-          },
+          where: { branchId_productId: { branchId, productId: item.productId } },
           data: updateData,
         });
 
@@ -214,7 +235,7 @@ export class SalesService {
       data: {
         type: 'SALE_COMPLETED',
         branchId: sale.branchId,
-        title: 'Sale Completed',
+        title: type === SaleType.INVOICE ? 'Invoice Created' : 'Sale Completed',
         message: `${type} sale ${saleCode} for KES ${total.toFixed(2)}`,
         entityId: sale.id,
         entityType: 'Sale',
@@ -222,15 +243,27 @@ export class SalesService {
       },
     });
 
+    // NOTIFY ALL ADMINS ABOUT THE INVOICE
     if (type === SaleType.INVOICE) {
-      await this.notificationsService.create({
-        type: 'INVOICE_CREATED',
-        title: 'New Invoice Sale',
-        message: `Invoice sale ${saleCode} created for KES ${total.toFixed(2)}`,
-        userId: user.userId,
-        entityId: sale.id,
-        entityType: 'Sale',
+      const admins = await this.prisma.user.findMany({
+        where: { role: { in: [UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER] } },
+        select: { id: true },
       });
+      
+      const branch = await this.prisma.branch.findUnique({ where: { id: branchId } });
+
+      await Promise.all(
+        admins.map((admin) =>
+          this.notificationsService.create({
+            type: 'INVOICE_CREATED',
+            title: 'New Invoice Issued',
+            message: `${branch?.name} issued an invoice (${saleCode}) for KES ${total.toFixed(2)}`,
+            userId: admin.id,
+            entityId: sale.id,
+            entityType: 'Sale',
+          }),
+        ),
+      );
     }
 
     return sale;
