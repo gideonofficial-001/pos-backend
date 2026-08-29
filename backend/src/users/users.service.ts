@@ -35,7 +35,7 @@ export class UsersService {
     const user = await this.prisma.user.create({
       data: {
         email,
-        passwordHash: hashedPassword, // Make sure we use passwordHash for your schema!
+        passwordHash: hashedPassword,
         firstName,
         lastName,
         phone,
@@ -202,7 +202,7 @@ export class UsersService {
     return { total, active, inactive, byRole };
   }
 
-  // ── Self-Management Logic ──────────────────────────────────────────────────
+  // ── NEW: Self-Management Logic ──
 
   async updateProfile(userId: string, data: { firstName?: string; lastName?: string }) {
     return this.prisma.user.update({
