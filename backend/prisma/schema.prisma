@@ -30,6 +30,7 @@ enum ProductType {
 
 enum SaleType {
   CASH
+  WHOLESALE
   INVOICE
 }
 
@@ -298,24 +299,29 @@ model ProductCategory {
 }
 
 model Product {
-  id          String          @id @default(uuid())
+  id          String      @id @default(uuid())
   name        String
-  code        String          @unique
+  code        String      @unique
   description String?
   type        ProductType
 
   categoryId String?
   category   ProductCategory? @relation(fields: [categoryId], references: [id])
 
-  price      Decimal  @db.Decimal(10, 2)
-  emptyPrice Decimal? @db.Decimal(10, 2)
+  // Retail Prices
+  price       Decimal  @db.Decimal(10, 2)
+  emptyPrice  Decimal? @db.Decimal(10, 2)
+
+  // Wholesale Prices (NEW)
+  wholesalePrice      Decimal  @default(0) @db.Decimal(10, 2)
+  wholesaleEmptyPrice Decimal? @db.Decimal(10, 2)
+
   costPrice  Decimal? @db.Decimal(10, 2)
 
   cylinderSize      String?
   brand             String?
   isCylinderTracked Boolean @default(false)
 
-  // LPG component flags (NEW)
   isLpg       Boolean @default(false)
   hasCylinder Boolean @default(false)
   hasRefill   Boolean @default(false)
@@ -325,7 +331,7 @@ model Product {
   inventory     Inventory[]
   saleItems     SaleItem[]
   transferItems TransferItem[]
-  cylinders     Cylinder[]     // NEW
+  cylinders     Cylinder[]     
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
