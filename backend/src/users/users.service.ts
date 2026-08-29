@@ -30,12 +30,13 @@ export class UsersService {
       throw new BadRequestException('Branch ID is required for branch managers');
     }
 
+    // Encrypt the password
     const hashedPassword = await bcrypt.hash(password, 10);
 
     const user = await this.prisma.user.create({
       data: {
         email,
-        passwordHash: hashedPassword,
+        password: hashedPassword, // Reverted to match Prisma schema
         firstName,
         lastName,
         phone,
@@ -55,7 +56,8 @@ export class UsersService {
       newValues: { email, firstName, lastName, role, branchId },
     });
 
-    const { passwordHash: _, ...result } = user;
+    // Strip the password before returning to the frontend
+    const { password: _, ...result } = user;
     return result;
   }
 
@@ -68,7 +70,8 @@ export class UsersService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    return users.map(({ passwordHash, ...user }) => user);
+    // Strip passwords from the list
+    return users.map(({ password, ...user }) => user);
   }
 
   async findOne(id: string) {
@@ -88,7 +91,8 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    const { passwordHash, ...result } = user;
+    // Strip the password before returning
+    const { password, ...result } = user;
     return result;
   }
 
@@ -103,9 +107,10 @@ export class UsersService {
     }
 
     const updateData: any = { ...updateUserDto };
+    
+    // Hash the password if the Admin is overwriting it
     if (updateUserDto.password) {
-      updateData.passwordHash = await bcrypt.hash(updateUserDto.password, 10);
-      delete updateData.password;
+      updateData.password = await bcrypt.hash(updateUserDto.password, 10);
     }
 
     const updatedUser = await this.prisma.user.update({
@@ -124,7 +129,8 @@ export class UsersService {
       newValues: updateUserDto,
     });
 
-    const { passwordHash, ...result } = updatedUser;
+    // Strip password from result
+    const { password, ...result } = updatedUser;
     return result;
   }
 
@@ -187,7 +193,8 @@ export class UsersService {
       newValues: { status },
     });
 
-    const { passwordHash, ...result } = updatedUser;
+    // Strip password
+    const { password, ...result } = updatedUser;
     return result;
   }
 
@@ -202,7 +209,7 @@ export class UsersService {
     return { total, active, inactive, byRole };
   }
 
-  // ── NEW: Self-Management Logic ──
+  // ── Self-Management Logic ──────────────────────────────────────────────────
 
   async updateProfile(userId: string, data: { firstName?: string; lastName?: string }) {
     return this.prisma.user.update({
@@ -219,7 +226,8 @@ export class UsersService {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
-    const isMatch = await bcrypt.compare(currentPass, user.passwordHash);
+    // Compare against the DB 'password' column
+    const isMatch = await bcrypt.compare(currentPass, user.password);
     if (!isMatch) {
       throw new BadRequestException('Incorrect current password');
     }
@@ -228,7 +236,7 @@ export class UsersService {
     
     await this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: hashedNewPassword },
+      data: { password: hashedNewPassword },
     });
 
     return { message: 'Password updated successfully' };
