@@ -56,16 +56,10 @@ export class SalesService {
         if (availableEmpty < item.quantity) {
           throw new BadRequestException(`Insufficient empty shells for ${inventory.product.name}. Available: ${availableEmpty}`);
         }
-        if (inventory.product.emptyPrice == null) {
-          throw new BadRequestException(`Empty shell price is not configured for ${inventory.product.name}`);
-        }
       } else if (variant === LpgSaleVariant.REFILL || variant === LpgSaleVariant.COMPLETE_SET || inventory.product.type === ProductType.LPG_CYLINDER) {
-        // Notice we only check fullCylinders here! Empty shells are irrelevant for complete sets.
+        // Complete sets only validate gas (fullCylinders)
         if ((inventory.fullCylinders ?? 0) < item.quantity) {
           throw new BadRequestException(`Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders ?? 0}`);
-        }
-        if (variant === LpgSaleVariant.COMPLETE_SET && inventory.product.emptyPrice == null) {
-          throw new BadRequestException(`Empty shell price is not configured for ${inventory.product.name}`);
         }
       } else {
         if (inventory.quantity < item.quantity) {
@@ -85,11 +79,22 @@ export class SalesService {
       });
       const variant = this.resolveVariant(product.type, item.lpgVariant);
 
-      let unitPrice = Number(product.price);
+      // Determine Retail vs Wholesale Pricing
+      let basePrice = Number(product.price);
+      let emptyPrice = Number(product.emptyPrice || 0);
+
+      if (type === SaleType.WHOLESALE) {
+        basePrice = Number(product.wholesalePrice || product.price);
+        emptyPrice = Number(product.wholesaleEmptyPrice || product.emptyPrice || 0);
+      }
+
+      let unitPrice = basePrice;
       if (variant === LpgSaleVariant.EMPTY_SHELL) {
-        unitPrice = Number(product.emptyPrice);
+        unitPrice = emptyPrice;
+        if (emptyPrice === 0) throw new BadRequestException(`Empty shell price is not configured for ${product.name}`);
       } else if (variant === LpgSaleVariant.COMPLETE_SET) {
-        unitPrice = Number(product.price) + Number(product.emptyPrice);
+        if (emptyPrice === 0) throw new BadRequestException(`Empty shell price is not configured for ${product.name}`);
+        unitPrice = basePrice + emptyPrice;
       }
 
       const total = unitPrice * item.quantity;
@@ -231,6 +236,7 @@ export class SalesService {
     return sale;
   }
 
+  // ... (Keep the rest of findAll, findOne, findByCode, getWeeklySales exactly the same) ...
   async findAll(query: {
     branchId?: string;
     startDate?: string;
