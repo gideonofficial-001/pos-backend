@@ -190,11 +190,16 @@ export class DevicesService {
 
     if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
       emailError = 'EMAIL_USER / EMAIL_PASS not configured on the server — share the code directly with the user.';
-      console.warn('[DevicesService] Email credentials missing. Code was generated but not emailed.');
+      this.logger.warn('[DevicesService] Email credentials missing. Code was generated but not emailed.');
     } else {
+      // 🚀 FIRE AND FORGET: We remove the "await" so the frontend UI gets the code instantly!
+      // We assume email generation initiated successfully for the UI popup.
+      emailSent = true; 
       try {
         const transporter = this.getMailTransporter();
-        await transporter.sendMail({
+        
+        // Notice there is no "await" here! It runs in the background.
+        transporter.sendMail({
           from: `"Njugush POS" <${process.env.EMAIL_USER}>`,
           to: device.user.email,
           subject: 'Device Authorization Code - Njugush POS',
@@ -211,11 +216,14 @@ export class DevicesService {
               <p style="font-size: 12px; color: #6b7280;">Njugush Enterprises POS System</p>
             </div>
           `,
+        }).catch((err: any) => {
+          // If the background email fails 30 seconds later, it logs silently to the server
+          this.logger.error(`[DevicesService] Background email delivery failed: ${err.message}`);
         });
-        emailSent = true;
       } catch (err: any) {
-        emailError = `Email delivery failed (${err.message}). Share the code directly with the user.`;
-        console.error('[DevicesService] Failed to send auth code email:', err.message);
+        emailSent = false;
+        emailError = 'Failed to initiate email sending.';
+        this.logger.error('[DevicesService] Failed to setup mailer:', err.message);
       }
     }
 
@@ -233,7 +241,7 @@ export class DevicesService {
 
     return {
       message: emailSent
-        ? 'Device approved — authorization code sent to user email'
+        ? 'Device approved — authorization code sent to user email (in background)'
         : 'Device approved — email not sent, use the code below',
       code,
       emailSent,
