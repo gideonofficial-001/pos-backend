@@ -80,12 +80,13 @@ export class SalesService {
       const variant = this.resolveVariant(product.type, item.lpgVariant);
 
       // Determine Retail vs Wholesale Pricing
+      // Casting to 'any' here as a safeguard until your new Prisma schema types generate
       let basePrice = Number(product.price);
       let emptyPrice = Number(product.emptyPrice || 0);
 
       if (type === SaleType.WHOLESALE) {
-        basePrice = Number(product.wholesalePrice || product.price);
-        emptyPrice = Number(product.wholesaleEmptyPrice || product.emptyPrice || 0);
+        basePrice = Number((product as any).wholesalePrice || product.price);
+        emptyPrice = Number((product as any).wholesaleEmptyPrice || product.emptyPrice || 0);
       }
 
       let unitPrice = basePrice;
@@ -120,9 +121,8 @@ export class SalesService {
         () => chars.charAt(Math.floor(Math.random() * chars.length)),
       ).join('');
     } while (await this.prisma.sale.findUnique({ where: { saleCode } }));
-  }
 
-        // ── 3. TRANSACTION ─────────────────────────────────────────────────────
+    // ── 3. TRANSACTION ─────────────────────────────────────────────────────
     const sale = await this.prisma.$transaction(async (tx) => {
       const newSale = await tx.sale.create({
         data: {
@@ -180,7 +180,9 @@ export class SalesService {
         });
         const variant = this.resolveVariant(product.type, item.lpgVariant);
 
-        const updateData: any = { totalSold: { increment: item.quantity } };
+        const updateData: any = {
+          totalSold: { increment: item.quantity },
+        };
         let quantityDelta = -item.quantity;
 
         if (product.type === ProductType.LPG_REFILL) {
@@ -201,7 +203,9 @@ export class SalesService {
         }
 
         await tx.inventory.update({
-          where: { branchId_productId: { branchId, productId: item.productId } },
+          where: {
+            branchId_productId: { branchId, productId: item.productId },
+          },
           data: updateData,
         });
 
@@ -269,7 +273,6 @@ export class SalesService {
     return sale;
   }
 
-  // ... (Keep the rest of findAll, findOne, findByCode, getWeeklySales exactly the same) ...
   async findAll(query: {
     branchId?: string;
     startDate?: string;
