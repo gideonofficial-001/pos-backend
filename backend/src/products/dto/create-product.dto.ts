@@ -1,17 +1,16 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsEnum } from 'class-validator';
-import { ProductType } from '@prisma/client';
-import { Type } from 'class-transformer';
+import { IsNotEmpty, IsString, IsOptional, IsNumber, IsBoolean, IsEnum } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { ProductType } from '@prisma/client';
 
 export class CreateProductDto {
   @ApiProperty()
-  @IsString()
   @IsNotEmpty()
+  @IsString()
   name: string;
 
   @ApiProperty()
-  @IsString()
   @IsNotEmpty()
+  @IsString()
   code: string;
 
   @ApiProperty({ required: false })
@@ -21,6 +20,7 @@ export class CreateProductDto {
 
   @ApiProperty({ enum: ProductType })
   @IsEnum(ProductType)
+  @IsNotEmpty()
   type: ProductType;
 
   @ApiProperty({ required: false })
@@ -29,15 +29,34 @@ export class CreateProductDto {
   categoryId?: string;
 
   @ApiProperty()
+  @IsNotEmpty()
   @IsNumber()
-  @Type(() => Number)
   price: number;
+
+  @ApiProperty()
+  @IsNotEmpty()
+  @IsNumber()
+  wholesalePrice: number;
 
   @ApiProperty({ required: false })
   @IsOptional()
   @IsNumber()
-  @Type(() => Number)
   emptyPrice?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  wholesaleEmptyPrice?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  costPrice?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  minStockLevel?: number;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -53,10 +72,4 @@ export class CreateProductDto {
   @IsOptional()
   @IsBoolean()
   isCylinderTracked?: boolean;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  minStockLevel?: number;
 }
