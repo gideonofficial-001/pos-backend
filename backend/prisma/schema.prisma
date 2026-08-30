@@ -864,3 +864,22 @@ model DailySalesSummary {
   @@unique([branchId, date])
   @@map("daily_sales_summaries")
 }
+
+model MpesaTransaction {
+  id                String   @id @default(uuid())
+  checkoutRequestId String   @unique
+  merchantRequestId String?
+  phoneNumber       String
+  amount            Float
+  status            String   // 'PENDING', 'COMPLETED', or 'FAILED'
+  receiptNumber     String?
+  resultDesc        String?
+  
+  // Link to the specific transaction
+  saleId            String?  @unique
+  invoiceId         String?
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
