@@ -20,6 +20,7 @@ import { CustomersModule } from './customers/customers.module';
 import { SettingsModule } from './settings/settings.module';
 import { ActivityFeedModule } from './activity-feed/activity-feed.module';
 import { HealthController } from './health.controller';
+import { MpesaModule } from './mpesa/mpesa.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { HealthController } from './health.controller';
     CustomersModule,
     SettingsModule,
     ActivityFeedModule,
+    MpesaModule
   ],
   controllers: [HealthController],
 })
