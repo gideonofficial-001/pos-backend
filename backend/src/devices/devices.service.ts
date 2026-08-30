@@ -63,22 +63,20 @@ export class DevicesService {
     });
 
     if (existingDevice) {
-      return { requestId: existingDevice.id, status: existingDevice.status };
+      // 🚀 THE FIX: If it was revoked, delete the old record so they can start fresh!
+      if (existingDevice.status === 'REVOKED') {
+        await this.prisma.device.delete({
+          where: { id: existingDevice.id },
+        });
+        this.logger.log(`[DevicesService] Deleted revoked device for user ${userId} to allow re-enrollment.`);
+      } else {
+        // If it is PENDING or APPROVED, return it normally
+        return { requestId: existingDevice.id, status: existingDevice.status };
+      }
     }
 
-    // NOTE: The strict 1-device limit has been removed so the PWA and new browsers
+    // NOTE: The strict 1-device limit is removed so the PWA and new browsers
     // can successfully request access and go into the PENDING state for the Admin to review.
-    /*
-    const approvedCount = await this.prisma.device.count({
-      where: { userId, status: DeviceStatus.APPROVED },
-    });
-
-    if (approvedCount >= 1) {
-      throw new UnauthorizedException(
-        'Security limit reached: user already has an active approved device.',
-      );
-    }
-    */
 
     const device = await this.prisma.device.create({
       data: {
@@ -193,12 +191,10 @@ export class DevicesService {
       this.logger.warn('[DevicesService] Email credentials missing. Code was generated but not emailed.');
     } else {
       // 🚀 FIRE AND FORGET: We remove the "await" so the frontend UI gets the code instantly!
-      // We assume email generation initiated successfully for the UI popup.
       emailSent = true; 
       try {
         const transporter = this.getMailTransporter();
         
-        // Notice there is no "await" here! It runs in the background.
         transporter.sendMail({
           from: `"Njugush POS" <${process.env.EMAIL_USER}>`,
           to: device.user.email,
@@ -217,7 +213,6 @@ export class DevicesService {
             </div>
           `,
         }).catch((err: any) => {
-          // If the background email fails 30 seconds later, it logs silently to the server
           this.logger.error(`[DevicesService] Background email delivery failed: ${err.message}`);
         });
       } catch (err: any) {
