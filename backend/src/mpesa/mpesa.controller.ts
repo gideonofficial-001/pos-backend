@@ -1,4 +1,4 @@
-import { Controller, Post, Body, Req, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, Logger } from '@nestjs/common';
 import { MpesaService } from './mpesa.service';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 
@@ -14,15 +14,24 @@ export class MpesaController {
   async initiateStkPush(
     @Body('phoneNumber') phoneNumber: string,
     @Body('amount') amount: number,
+    @Body('saleId') saleId?: string,
     @Body('invoiceId') invoiceId?: string,
   ) {
-    return this.mpesaService.initiateStkPush(phoneNumber, amount, invoiceId);
+    return this.mpesaService.initiateStkPush(phoneNumber, amount, saleId, invoiceId);
   }
 
+  //  FRONTEND POLLING ENDPOINT
+  @Get('status/:checkoutRequestId')
+  @ApiOperation({ summary: 'Check status of an STK Push' })
+  async getTransactionStatus(@Param('checkoutRequestId') checkoutRequestId: string) {
+    return this.mpesaService.getTransactionStatus(checkoutRequestId);
+  }
+
+  //  SAFARICOM WEBHOOK (Must be completely public, no Auth Guards!)
   @Post('callback')
   @ApiOperation({ summary: 'Safaricom Callback Webhook' })
   async handleCallback(@Body() callbackData: any) {
-    this.logger.log('Received M-Pesa Callback');
+    this.logger.log('Received M-Pesa Callback payload');
     return this.mpesaService.handleCallback(callbackData);
   }
 }
