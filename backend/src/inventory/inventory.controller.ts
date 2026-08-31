@@ -1,4 +1,14 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { InventoryService } from './inventory.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -15,8 +25,12 @@ export class InventoryController {
   constructor(private inventoryService: InventoryService) {}
 
   @Get()
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
-  @ApiOperation({ summary: 'Get all inventory items' })
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.OVERALL_MANAGER,
+    UserRole.BRANCH_MANAGER,
+  )
+  @ApiOperation({ summary: 'Get inventory items' })
   async findAll(
     @Query('branchId') branchId?: string,
     @Query('lowStock') lowStock?: string,
@@ -30,7 +44,11 @@ export class InventoryController {
   }
 
   @Get('low-stock')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.OVERALL_MANAGER,
+    UserRole.BRANCH_MANAGER,
+  )
   @ApiOperation({ summary: 'Get low stock items' })
   async getLowStock(@GetUser() user?: any) {
     return this.inventoryService.getLowStock(user);
@@ -43,10 +61,18 @@ export class InventoryController {
     @Query('inventoryId') inventoryId?: string,
     @Query('branchId') branchId?: string,
   ) {
-    return this.inventoryService.getStockMovements(inventoryId, branchId);
+    return this.inventoryService.getStockMovements(
+      inventoryId,
+      branchId,
+    );
   }
 
   @Get(':id')
+  @Roles(
+    UserRole.SUPER_ADMIN,
+    UserRole.OVERALL_MANAGER,
+    UserRole.BRANCH_MANAGER,
+  )
   @ApiOperation({ summary: 'Get inventory item by ID' })
   async findOne(@Param('id') id: string) {
     return this.inventoryService.findOne(id);
@@ -68,9 +94,37 @@ export class InventoryController {
   @ApiOperation({ summary: 'Adjust stock quantity (Admin only)' })
   async adjustStock(
     @Param('id') id: string,
-    @Body() payload: { quantity?: number; fullCylinders?: number; emptyCylinders?: number; reason: string },
+    @Body()
+    payload: {
+      quantity?: number;
+      fullCylinders?: number;
+      emptyCylinders?: number;
+      reason: string;
+    },
     @GetUser('userId') userId: string,
   ) {
     return this.inventoryService.adjustStock(id, payload, userId);
+  }
+
+  /**
+   * Delete an inventory/product item.
+   *
+   * IMPORTANT:
+   * - SUPER_ADMIN deleting from HQ = GLOBAL deletion.
+   * - BRANCH_MANAGER deleting from their branch = LOCAL deletion.
+   */
+  @Delete(':id')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
+  @ApiOperation({
+    summary: 'Delete inventory item locally or globally depending on user/branch',
+  })
+  async delete(
+    @Param('id') inventoryId: string,
+    @GetUser() user: any,
+  ) {
+    return this.inventoryService.deleteInventoryItem(
+      inventoryId,
+      user,
+    );
   }
 }
