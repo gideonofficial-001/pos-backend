@@ -178,33 +178,79 @@ export class InventoryService {
     return items.map((item) => this.withComputedEmptyCylinders(item));
   }
 
-  async getStockMovements(inventoryId?: string, branchId?: string) {
+    async getStockMovements(inventoryId?: string, branchId?: string) {
     const where: any = {};
+
     if (inventoryId) where.inventoryId = inventoryId;
-    // branchId filter via inventory relation
-    if (branchId) where.inventory = { branchId };
+
+    // Filter by branch through the inventory relation
+    if (branchId) {
+      where.inventory = { branchId };
+    }
 
     return this.prisma.stockMovement.findMany({
       where,
       include: {
-        inventory: { include: { product: { select: { name: true } } } },
-        performedBy: { select: { firstName: true, lastName: true } },
+        inventory: {
+          include: {
+            product: {
+              select: { name: true },
+            },
+          },
+        },
+        performedBy: {
+          select: {
+            firstName: true,
+            lastName: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
-async delete(id: string) {
+  }
+
+  async delete(id: string) {
     try {
-      await this.prisma.inventory.delete({ where: { id } });
-      return { message: 'Item successfully removed from this branch.' };
+      // First check that the inventory record exists
+      const inventory = await this.prisma.inventory.findUnique({
+        where: { id },
+        include: {
+          product: true,
+        },
+      });
+
+      if (!inventory) {
+        throw new NotFoundException('Inventory item not found');
+      }
+
+      /*
+       * Try to delete the inventory record.
+       *
+       * If other records reference this inventory item, Prisma will
+       * throw P2003. In that case we preserve the historical record
+       * rather than destroying it.
+       */
+      await this.prisma.inventory.delete({
+        where: { id },
+      });
+
+      return {
+        message: 'Inventory item successfully removed from this branch.',
+        deleted: true,
+      };
     } catch (error: any) {
-      if (error.code === 'P2003') {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+
+      if (error?.code === 'P2003') {
         throw new BadRequestException(
-          'Cannot remove this item locally because it has an established stock movement history. Please adjust its quantity to 0 instead to maintain accurate financial audits.'
+          'This inventory item cannot be permanently deleted because it has existing transaction history. Deactivate the product instead to preserve historical records.',
         );
       }
+
       throw error;
     }
   }
-
 }
