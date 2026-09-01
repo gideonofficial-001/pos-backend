@@ -51,6 +51,7 @@
     "axios": "^1.6.8"
   },
   "devDependencies": {
+    "prisma": "^5.7.1",
     "@nestjs/schematics": "^10.1.0",
     "@nestjs/testing": "^10.3.0",
     "@types/bcrypt": "^5.0.2",
