@@ -119,3 +119,4 @@ export class InventoryController {
   async delete(@Param('id') id: string) {
     return this.inventoryService.delete(id);
   }
+}
