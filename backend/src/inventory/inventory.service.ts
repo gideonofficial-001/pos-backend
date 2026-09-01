@@ -193,9 +193,6 @@ export class InventoryService {
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
-  }
-}
-
 async delete(id: string) {
     try {
       await this.prisma.inventory.delete({ where: { id } });
