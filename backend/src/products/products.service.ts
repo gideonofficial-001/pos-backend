@@ -12,15 +12,14 @@ export class ProductsService {
   ) {}
 
   async create(createProductDto: CreateProductDto, performedBy: string) {
-    // 1. Create the base product
     const product = await this.prisma.product.create({
       data: createProductDto,
       include: { category: true },
     });
 
-    // 2. Automatically seed this product into ALL branches with 0 stock
+    // Automatically seed this product into ALL branches with 0 stock
     const branches = await this.prisma.branch.findMany();
-    
+
     if (branches.length > 0) {
       const inventoryData = branches.map((branch) => ({
         branchId: branch.id,
@@ -29,12 +28,9 @@ export class ProductsService {
         minimumQuantity: product.minStockLevel || 10,
       }));
 
-      await this.prisma.inventory.createMany({
-        data: inventoryData,
-      });
+      await this.prisma.inventory.createMany({ data: inventoryData });
     }
 
-    // 3. Log the action
     await this.auditLogsService.create({
       userId: performedBy,
       action: 'PRODUCT_CREATED',
@@ -47,18 +43,17 @@ export class ProductsService {
     return product;
   }
 
-  async findAll(query?: { categoryId?: string; type?: string; search?: string; isActive?: boolean }) {
+  async findAll(query?: {
+    categoryId?: string;
+    type?: string;
+    search?: string;
+    isActive?: boolean;
+  }) {
     const where: any = {};
 
-    if (query?.categoryId) {
-      where.categoryId = query.categoryId;
-    }
-    if (query?.type) {
-      where.type = query.type;
-    }
-    if (query?.isActive !== undefined) {
-      where.isActive = query.isActive;
-    }
+    if (query?.categoryId) where.categoryId = query.categoryId;
+    if (query?.type) where.type = query.type;
+    if (query?.isActive !== undefined) where.isActive = query.isActive;
     if (query?.search) {
       where.OR = [
         { name: { contains: query.search, mode: 'insensitive' } },
@@ -80,18 +75,13 @@ export class ProductsService {
       include: { category: true },
     });
 
-    if (!product) {
-      throw new NotFoundException('Product not found');
-    }
-
+    if (!product) throw new NotFoundException('Product not found');
     return product;
   }
 
   async update(id: string, updateProductDto: UpdateProductDto, performedBy: string) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) {
-      throw new NotFoundException('Product not found');
-    }
+    if (!product) throw new NotFoundException('Product not found');
 
     const updated = await this.prisma.product.update({
       where: { id },
@@ -114,31 +104,72 @@ export class ProductsService {
 
   async delete(id: string, performedBy: string) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) {
-      throw new NotFoundException('Product not found');
+    if (!product) throw new NotFoundException('Product not found');
+
+    // Check whether this product has any associated sale or transfer records.
+    // Prisma's onDelete: Cascade covers Inventory rows, but SaleItem and
+    // TransferItem do NOT have cascade — attempting a hard delete when those
+    // records exist causes a PostgreSQL FK constraint error (P2003).
+    const [saleItemCount, transferItemCount] = await Promise.all([
+      this.prisma.saleItem.count({ where: { productId: id } }),
+      this.prisma.transferItem.count({ where: { productId: id } }),
+    ]);
+
+    const hasHistory = saleItemCount > 0 || transferItemCount > 0;
+
+    if (hasHistory) {
+      // ── Soft delete ──────────────────────────────────────────────────────
+      // We cannot hard-delete this product without destroying sales/transfer
+      // history. Mark it inactive instead — it disappears from all active
+      // workflows (inventory display, new-sale search, transfer pickers) but
+      // its audit trail is fully preserved.
+      await this.prisma.product.update({
+        where: { id },
+        data: { isActive: false },
+      });
+
+      await this.auditLogsService.create({
+        userId: performedBy,
+        action: 'PRODUCT_UPDATED',
+        description: `Deactivated product "${product.name}" (${saleItemCount} sale record(s), ${transferItemCount} transfer record(s) — permanent deletion blocked to preserve history)`,
+        entityType: 'Product',
+        entityId: id,
+        oldValues: product as any,
+        newValues: { isActive: false } as any,
+      });
+
+      return {
+        softDeleted: true,
+        saleItemCount,
+        transferItemCount,
+        message: `"${product.name}" has been deactivated. It cannot be permanently deleted because it appears in ${saleItemCount} sale(s) and ${transferItemCount} transfer(s). Deactivating it hides it from all active workflows while keeping your records intact.`,
+      };
     }
 
-    // Because of onDelete: Cascade in schema.prisma, this safely deletes 
-    // all linked Inventory records globally without throwing errors.
+    // ── Hard delete ──────────────────────────────────────────────────────────
+    // No sales or transfer history — safe to remove entirely.
+    // Inventory rows across all branches are removed automatically via
+    // the onDelete: Cascade constraint on Inventory.productId.
     await this.prisma.product.delete({ where: { id } });
 
     await this.auditLogsService.create({
       userId: performedBy,
-      action: 'PRODUCT_DELETED',
-      description: `Deleted product ${product.name} globally`,
+      action: 'PRODUCT_UPDATED',
+      description: `Permanently deleted product "${product.name}" (${product.code}) from all branches`,
       entityType: 'Product',
       entityId: id,
       oldValues: product as any,
     });
 
-    return { message: 'Product and associated inventory deleted successfully' };
+    return {
+      softDeleted: false,
+      message: `"${product.name}" has been permanently deleted from all branches.`,
+    };
   }
 
   async toggleStatus(id: string) {
     const product = await this.prisma.product.findUnique({ where: { id } });
-    if (!product) {
-      throw new NotFoundException('Product not found');
-    }
+    if (!product) throw new NotFoundException('Product not found');
 
     return this.prisma.product.update({
       where: { id },
@@ -166,12 +197,9 @@ export class ProductsService {
       include: { products: true },
     });
 
-    if (!category) {
-      throw new NotFoundException('Category not found');
-    }
+    if (!category) throw new NotFoundException('Category not found');
 
     if (category.products.length > 0) {
-      // Unlink products from category before deleting
       await this.prisma.product.updateMany({
         where: { categoryId: id },
         data: { categoryId: null },
