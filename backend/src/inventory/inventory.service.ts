@@ -195,3 +195,17 @@ export class InventoryService {
     });
   }
 }
+
+async delete(id: string) {
+    try {
+      await this.prisma.inventory.delete({ where: { id } });
+      return { message: 'Item successfully removed from this branch.' };
+    } catch (error: any) {
+      if (error.code === 'P2003') {
+        throw new BadRequestException(
+          'Cannot remove this item locally because it has an established stock movement history. Please adjust its quantity to 0 instead to maintain accurate financial audits.'
+        );
+      }
+      throw error;
+    }
+  }
