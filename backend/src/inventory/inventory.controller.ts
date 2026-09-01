@@ -113,18 +113,9 @@ export class InventoryController {
    * - SUPER_ADMIN deleting from HQ = GLOBAL deletion.
    * - BRANCH_MANAGER deleting from their branch = LOCAL deletion.
    */
-  @Delete(':id')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.BRANCH_MANAGER)
-  @ApiOperation({
-    summary: 'Delete inventory item locally or globally depending on user/branch',
-  })
-  async delete(
-    @Param('id') inventoryId: string,
-    @GetUser() user: any,
-  ) {
-    return this.inventoryService.deleteInventoryItem(
-      inventoryId,
-      user,
-    );
+ @Delete(':id')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Remove an item from a specific branch locally' })
+  async delete(@Param('id') id: string) {
+    return this.inventoryService.delete(id);
   }
-}
