@@ -11,32 +11,32 @@ async function main() {
     prisma.branch.upsert({
       where: { code: 'HQ' },
       update: {},
-      create: { name: 'Headquarters', code: 'HQ', address: 'Main Street, Nairobi', phone: '+254700000001', email: 'hq@njugush.co.ke' },
+      create: { name: 'Headquarters', code: 'HQ', address: 'Main Street, Nairobi', phone: '+254727202627', email: 'hq@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR01' },
       update: {},
-      create: { name: 'Branch 1 - Westlands', code: 'BR01', address: 'Westlands, Nairobi', phone: '+254700000002', email: 'westlands@njugush.co.ke' },
+      create: { name: 'KANAM', code: 'BR01', address: 'Kanam, Lodwar', phone: '+254700000002', email: 'westlands@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR02' },
       update: {},
-      create: { name: 'Branch 2 - Eastleigh', code: 'BR02', address: 'Eastleigh, Nairobi', phone: '+254700000003', email: 'eastleigh@njugush.co.ke' },
+      create: { name: 'KANAM 2', code: 'BR02', address: 'Antidonte, Lodwar', phone: '+254700000003', email: 'eastleigh@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR03' },
       update: {},
-      create: { name: 'Branch 3 - Karen', code: 'BR03', address: 'Karen, Nairobi', phone: '+254700000004', email: 'karen@njugush.co.ke' },
+      create: { name: 'KALOKOL', code: 'BR03', address: 'Kalokol, Lodwar', phone: '+254700000004', email: 'karen@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR04' },
       update: {},
-      create: { name: 'Branch 4 - Ngong Road', code: 'BR04', address: 'Ngong Road, Nairobi', phone: '+254700000005', email: 'ngong@njugush.co.ke' },
+      create: { name: 'STORE', code: 'BR04', address: 'Kanam, Lodwar', phone: '+254700000005', email: 'ngong@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR05' },
       update: {},
-      create: { name: 'Branch 5 - Mombasa Road', code: 'BR05', address: 'Mombasa Road, Nairobi', phone: '+254700000006', email: 'mombasaroad@njugush.co.ke' },
+      create: { name: 'GOLD', code: 'BR05', address: 'Lodwar, Kenya', phone: '+254700000006', email: 'mombasaroad@njugush.co.ke' },
     }),
     prisma.branch.upsert({
       where: { code: 'BR06' },
@@ -53,7 +53,7 @@ async function main() {
   await prisma.user.upsert({
     where: { email: 'ceo@njugush.co.ke' },
     update: {},
-    create: { email: 'ceo@njugush.co.ke', password: hashedPassword, firstName: 'Njugush', lastName: 'CEO', phone: '+254727202653', role: UserRole.SUPER_ADMIN, status: 'ACTIVE', branchId: branches[0].id },
+    create: { email: 'charleynjuguna89@gmail.com', password: hashedPassword, firstName: 'Njugush', lastName: 'CEO', phone: '+254727202653', role: UserRole.SUPER_ADMIN, status: 'ACTIVE', branchId: branches[0].id },
   });
 
   await prisma.user.upsert({
@@ -71,7 +71,7 @@ async function main() {
   }
 
   // 3. Create the Starter Pack Categories
-  const categoryNames = ['3Kg LPG', '6Kg LPG', '13Kg LPG', '45Kg LPG', 'Accessories', 'Electronics'];
+  const categoryNames = ['3Kg LPG', '6Kg LPG', '13Kg LPG', '50Kg LPG', 'Accessories', 'Electronics'];
   const categories: Record<string, string> = {};
 
   for (const name of categoryNames) {
@@ -85,7 +85,7 @@ async function main() {
   console.log(`Created ${Object.keys(categories).length} categories`);
 
   // 4. Create Starter Pack Products
-  const brands = ['K-Gas', 'Supa Gas', 'Afri Gas', 'Hashi', 'Sea Gas', 'Total', 'Jamii', 'Pro Gas', 'Top Gas'];
+  const brands = ['Afri Gas', 'Hashi', 'K-Gas', 'Mwanga', 'Ola', 'Others', 'Pro-Gas', 'Supa', 'Top', 'Total'];
   const products = [];
 
   // Seed 6Kg Products (Refill: 1400, Empty: 3000)
