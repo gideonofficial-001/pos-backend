@@ -51,7 +51,7 @@ async function main() {
   const hashedPassword = await bcrypt.hash('admin123', 10);
 
   await prisma.user.upsert({
-    where: { email: 'ceo@njugush.co.ke' },
+    where: { email: 'charleynjuguna89@gmail.com' },
     update: {},
     create: { email: 'charleynjuguna89@gmail.com', password: hashedPassword, firstName: 'Njugush', lastName: 'CEO', phone: '+254727202653', role: UserRole.SUPER_ADMIN, status: 'ACTIVE', branchId: branches[0].id },
   });
@@ -100,7 +100,9 @@ async function main() {
         type: ProductType.LPG_REFILL,
         categoryId: categories['6Kg LPG'],
         price: 1400,
+        wholesalePrice: 1050,
         emptyPrice: 3000,
+        wholesaleEmptyPrice: 3000,
         isCylinderTracked: true,
         minStockLevel: 10,
       },
@@ -120,7 +122,9 @@ async function main() {
         type: ProductType.LPG_REFILL,
         categoryId: categories['13Kg LPG'],
         price: 3000,
+        wholesalePrice: 2200,
         emptyPrice: 5000,
+        wholesaleEmptyPrice: 5000,
         isCylinderTracked: true,
         minStockLevel: 10,
       },
@@ -139,8 +143,8 @@ async function main() {
         create: {
           branchId: branch.id,
           productId: product.id,
-          quantity: 20,
-          fullCylinders: 20,
+          quantity: 1000,
+          fullCylinders: 1000,
         },
       });
     }
@@ -165,9 +169,9 @@ async function main() {
   // Customer schema fields: name, phone, email, address, notes, creditLimit, creditUsed, totalPurchases, isActive
   // fullName, customerCode, businessName, isInvoiceEligible do NOT exist
   const customersData = [
-    { name: 'John Kamau', phone: '+254712345678', email: 'john@example.com', creditLimit: 50000 },
-    { name: 'Mary Wanjiku', phone: '+254723456789', email: 'mary@example.com', creditLimit: 30000 },
-    { name: 'Peter Ochieng', phone: '+254734567890', creditLimit: 100000 },
+    { name: 'BLESSKY', phone: '+254712345678', email: 'john@example.com', creditLimit: 50000 },
+    { name: 'PETER JAMII', phone: '+254723456789', email: 'mary@example.com', creditLimit: 30000 },
+    { name: 'LOKIMAT MATRESS', phone: '+254734567890', creditLimit: 100000 },
   ];
 
   for (const c of customersData) {
