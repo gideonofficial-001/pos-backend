@@ -1,4 +1,10 @@
-import { IsOptional, IsString, IsEnum, IsNumber, IsBoolean } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsEnum,
+  IsNumber,
+  IsBoolean,
+} from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { ProductType } from '@prisma/client';
 
@@ -36,7 +42,17 @@ export class UpdateProductDto {
   @ApiProperty({ required: false })
   @IsOptional()
   @IsNumber()
+  wholesalePrice?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
   emptyPrice?: number;
+
+  @ApiProperty({ required: false })
+  @IsOptional()
+  @IsNumber()
+  wholesaleEmptyPrice?: number;
 
   @ApiProperty({ required: false })
   @IsOptional()
@@ -63,13 +79,3 @@ export class UpdateProductDto {
   @IsBoolean()
   isActive?: boolean;
 }
-
-@ApiProperty({ required: false })
-@IsOptional()
-@IsNumber()
-wholesalePrice?: number;
-
-@ApiProperty({ required: false })
-@IsOptional()
-@IsNumber()
-wholesaleEmptyPrice?: number;
