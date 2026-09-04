@@ -63,3 +63,13 @@ export class UpdateProductDto {
   @IsBoolean()
   isActive?: boolean;
 }
+
+@ApiProperty({ required: false })
+@IsOptional()
+@IsNumber()
+wholesalePrice?: number;
+
+@ApiProperty({ required: false })
+@IsOptional()
+@IsNumber()
+wholesaleEmptyPrice?: number;
