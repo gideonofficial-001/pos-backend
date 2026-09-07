@@ -123,14 +123,13 @@ export class InvoicesService {
 
     return updatedInvoice;
   }
-}
 
-async cancel(id: string) {
+  // 🚀 The cancel method is now safely INSIDE the class
+  async cancel(id: string) {
     const invoice = await this.prisma.invoice.findUnique({ where: { id } });
     if (!invoice) throw new NotFoundException('Invoice not found');
     
     if (invoice.status === 'PAID') {
-      import { BadRequestException } from '@nestjs/common';
       throw new BadRequestException('Cannot cancel an invoice that has already been paid');
     }
 
@@ -146,9 +145,8 @@ async cancel(id: string) {
         where: { id: invoice.saleId },
         data: { status: 'CANCELLED' }
       });
-      // (Optional: If you track active stock deduction on invoice generation, 
-      // you would loop through the sale items and add the quantity back to inventory here).
     }
 
     return { message: 'Invoice cancelled successfully' };
   }
+}
