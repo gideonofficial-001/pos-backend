@@ -1,7 +1,7 @@
 import { IsNotEmpty, IsString, IsOptional, IsEnum, IsNumber, IsArray, ValidateNested, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { SaleType, LpgSaleVariant } from '@prisma/client';
+import { SaleType, PaymentProvider } from '@prisma/client';
 
 class SaleItemDto {
   @ApiProperty()
@@ -46,6 +46,14 @@ export class CreateSaleDto {
   @IsOptional()
   @IsString()
   customerPhone?: string;
+
+  @IsOptional()
+  @IsEnum(PaymentProvider)
+  paymentProvider?: PaymentProvider;
+
+  @IsOptional()
+  @IsString()
+  mpesaRef?: string;
 
   @ApiProperty({ type: [SaleItemDto] })
   @IsArray({ message: 'Items array is required' })
