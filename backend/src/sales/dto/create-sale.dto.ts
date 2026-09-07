@@ -1,7 +1,7 @@
 import { IsNotEmpty, IsString, IsOptional, IsEnum, IsNumber, IsArray, ValidateNested, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
-import { SaleType, PaymentProvider } from '@prisma/client';
+import { SaleType, PaymentProvider, LpgSaleVariant } from '@prisma/client';
 
 class SaleItemDto {
   @ApiProperty()
