@@ -124,3 +124,31 @@ export class InvoicesService {
     return updatedInvoice;
   }
 }
+
+async cancel(id: string) {
+    const invoice = await this.prisma.invoice.findUnique({ where: { id } });
+    if (!invoice) throw new NotFoundException('Invoice not found');
+    
+    if (invoice.status === 'PAID') {
+      import { BadRequestException } from '@nestjs/common';
+      throw new BadRequestException('Cannot cancel an invoice that has already been paid');
+    }
+
+    // 1. Cancel the Invoice
+    await this.prisma.invoice.update({
+      where: { id },
+      data: { status: 'CANCELLED' }
+    });
+
+    // 2. Cancel the linked Sale
+    if (invoice.saleId) {
+      await this.prisma.sale.update({
+        where: { id: invoice.saleId },
+        data: { status: 'CANCELLED' }
+      });
+      // (Optional: If you track active stock deduction on invoice generation, 
+      // you would loop through the sale items and add the quantity back to inventory here).
+    }
+
+    return { message: 'Invoice cancelled successfully' };
+  }
