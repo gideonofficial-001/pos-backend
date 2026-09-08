@@ -283,8 +283,7 @@ export class SalesService {
   }) {
     const { branchId, startDate, endDate, type, search, user } = query;
     const where: any = {
-      if (user?.role === UserRole.BRANCH_MANAGER) {
-      where.branchId = user.branchId;
+      status: { not: 'RETURNED' }
     };
 
     if (branchId) {
