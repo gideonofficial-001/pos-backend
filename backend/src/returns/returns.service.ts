@@ -115,7 +115,7 @@ export class ReturnsService {
     return returnRequest;
   }
 
-  async approve(id: string, approvedById: string) {
+    async approve(id: string, approvedById: string) {
     const returnRequest = await this.prisma.return.findUnique({
       where: { id },
       include: { sale: { include: { saleItems: true } } },
@@ -126,6 +126,7 @@ export class ReturnsService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      // 1. Mark Return as Approved
       await tx.return.update({
         where: { id },
         data: {
@@ -135,20 +136,37 @@ export class ReturnsService {
         },
       });
 
+      // 2. Restore Inventory based on Product/LPG Type
       for (const item of returnRequest.sale.saleItems) {
-        const inventory = await tx.inventory.findUnique({
+        //  FIX: Use findFirst to safely avoid compound ID errors
+        const inventory = await tx.inventory.findFirst({
           where: {
-            branchId_productId: {
-              branchId: returnRequest.branchId,
-              productId: item.productId,
-            },
+            branchId: returnRequest.branchId,
+            productId: item.productId,
           },
         });
 
         if (inventory) {
+          let inventoryUpdate: any = {};
+
+          //  FIX: Handle your custom LPG Gas logic
+          if (item.lpgVariant === 'REFILL') {
+            inventoryUpdate = { fullCylinders: { increment: item.quantity } };
+          } else if (item.lpgVariant === 'EMPTY_SHELL') {
+            inventoryUpdate = { quantity: { increment: item.quantity } };
+          } else if (item.lpgVariant === 'COMPLETE_SET') {
+            inventoryUpdate = {
+              quantity: { increment: item.quantity },
+              fullCylinders: { increment: item.quantity }
+            };
+          } else {
+            // Standard non-LPG items
+            inventoryUpdate = { quantity: { increment: item.quantity } };
+          }
+
           await tx.inventory.update({
             where: { id: inventory.id },
-            data: { quantity: { increment: item.quantity } },
+            data: inventoryUpdate,
           });
 
           await tx.stockMovement.create({
@@ -165,6 +183,7 @@ export class ReturnsService {
         }
       }
 
+      // 3. Mark Sale as RETURNED
       await tx.sale.update({
         where: { id: returnRequest.saleId },
         data: { status: 'RETURNED' },
@@ -182,6 +201,7 @@ export class ReturnsService {
 
     return this.findOne(id);
   }
+
 
   async reject(id: string, approvedById: string, rejectionReason: string) {
     const returnRequest = await this.prisma.return.findUnique({ where: { id } });
