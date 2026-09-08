@@ -15,12 +15,18 @@ interface AuthUser {
   branchId?: string;
 }
 
-function itemLabel(item: { quantity: number; product: { name: string }; lpgComponent?: string | null }): string {
-  const v = item.lpgComponent ? ` (${item.lpgComponent})` : '';
-  return `${item.product.name}${v} x${item.quantity}`;
+// 🚀 FIXED: Better labels for internal activity feeds and notifications
+function itemLabel(item: any): string {
+  const isLpg = item.product?.isCylinderTracked || item.product?.isLpg;
+  if (isLpg) {
+    if (item.lpgComponent === 'REFILL') return `${item.product.name} (Gas Refill) x${item.quantity}`;
+    if (item.lpgComponent === 'CYLINDER') return `${item.product.name} (Complete Set) x${item.quantity}`;
+    return `${item.product.name} (Empty Shell) x${item.quantity}`;
+  }
+  return `${item.product.name} x${item.quantity}`;
 }
 
-function buildItemsSummary(items: { quantity: number; product: { name: string }; lpgComponent?: string | null }[]): string {
+function buildItemsSummary(items: any[]): string {
   return items.map(itemLabel).join(', ');
 }
 
@@ -67,7 +73,7 @@ export class TransfersService {
       if (!inventory) throw new BadRequestException(`Product not found in source branch inventory`);
 
       const variant = item.variant ?? 'STANDARD';
-      const isLpg = inventory.product.isCylinderTracked;
+      const isLpg = inventory.product.isCylinderTracked || inventory.product.isLpg;
       let lpgComponent: LpgComponent | undefined = undefined;
 
       if (isLpg) {
@@ -166,7 +172,7 @@ export class TransfersService {
         toBranch:    { select: { id: true, name: true } },
         requestedBy: { select: { id: true, firstName: true, lastName: true } },
         items: {
-          include: { product: { select: { id: true, name: true } } },
+          include: { product: true }, // 🚀 THE FIX: This sends the full product data (isLpg, isCylinderTracked) to the frontend!
           orderBy: { createdAt: 'asc' },
         },
       },
@@ -193,7 +199,7 @@ export class TransfersService {
 
   private async applyItemStockMovement(tx: any, transfer: any, item: any, performedById: string) {
     const lpgComponent = item.lpgComponent;
-    const isLpg = item.product?.isCylinderTracked;
+    const isLpg = item.product?.isCylinderTracked || item.product?.isLpg;
 
     // ── Deduct from sender ────────────────────────────────────────────────
     const sourceInv = await tx.inventory.findUnique({
