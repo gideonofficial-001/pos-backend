@@ -52,11 +52,6 @@ export class NotificationsService {
   }
 
   // ── Role-aware notification fetch ─────────────────────────────────────────
-  //
-  // Rules:
-  //   SUPER_ADMIN / OVERALL_MANAGER → see everything EXCEPT transfer notifications
-  //   BRANCH_MANAGER               → see their own + global (includes transfers for
-  //                                   their branch because those are userId-scoped)
 
   async getNotifications(userId: string, userRole: UserRole) {
     const where = this.buildWhere(userId, userRole);
@@ -70,13 +65,9 @@ export class NotificationsService {
 
   // ── findAll (kept for backwards compat with older controllers) ────────────
 
-  async findAll(userId?: string) {
-    const where: any = {};
-    if (userId) {
-      where.OR = [{ userId }, { userId: null }];
-    }
+  async findAll(userId: string) {
     return this.prisma.notification.findMany({
-      where,
+      where: { userId }, // 🚀 STRICTLY SCOPED
       orderBy: { createdAt: 'desc' },
       take: 100,
     });
@@ -94,28 +85,22 @@ export class NotificationsService {
 
   // ── Mark as read ──────────────────────────────────────────────────────────
 
-  async markAsRead(id: string, userId?: string) {
-    if (userId) {
-      // Scope to notifications the user can see (own + global)
-      return this.prisma.notification.updateMany({
-        where: {
-          id,
-          OR: [{ userId }, { userId: null }],
-        },
-        data: { status: NotificationStatus.READ, readAt: new Date() },
-      });
-    }
-
-    return this.prisma.notification.update({
-      where: { id },
+  async markAsRead(id: string, userId: string) {
+    // 🚀 STRICTLY SCOPED to the exact user
+    return this.prisma.notification.updateMany({
+      where: {
+        id,
+        userId: userId,
+      },
       data: { status: NotificationStatus.READ, readAt: new Date() },
     });
   }
 
   async markAllAsRead(userId: string) {
+    // 🚀 STRICTLY SCOPED to the exact user
     return this.prisma.notification.updateMany({
       where: {
-        OR: [{ userId }, { userId: null }],
+        userId: userId,
         status: NotificationStatus.UNREAD,
       },
       data: { status: NotificationStatus.READ, readAt: new Date() },
@@ -167,11 +152,11 @@ export class NotificationsService {
   // ── Delete ───────────────────────────────────────────────────────────────────
 
   async delete(id: string, userId: string) {
-    // Users can only delete their own notifications or global ones
+    // 🚀 STRICTLY SCOPED to the exact user
     return this.prisma.notification.deleteMany({
       where: {
         id,
-        OR: [{ userId }, { userId: null }],
+        userId: userId, 
       },
     });
   }
@@ -184,12 +169,10 @@ export class NotificationsService {
       userRole === UserRole.OVERALL_MANAGER;
 
     if (isAdmin) {
-      // Admins see their own + global notifications but NOT transfer noise
+      // Admins see their own notifications but NOT transfer noise
       return {
         AND: [
-          {
-            OR: [{ userId }, { userId: null }],
-          },
+          { userId: userId }, // 🚀 STRICTLY SCOPED
           {
             NOT: {
               type: { in: TRANSFER_TYPES as any },
@@ -199,11 +182,9 @@ export class NotificationsService {
       };
     }
 
-    // Branch managers see all their own + global notifications
-    // Transfer notifications for their branch are userId-scoped in transfer.service.ts
-    // so they naturally appear here
+    // Branch managers see only their own notifications strictly
     return {
-      OR: [{ userId }, { userId: null }],
+      userId: userId, // 🚀 STRICTLY SCOPED
     };
   }
 }
