@@ -9,9 +9,20 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
 
-  // Enable CORS
+  // Allowed origins — add any extra domains here if needed
+  const allowedOrigins = [
+    configService.get('FRONTEND_URL'),      // e.g. https://njugush-ent.vercel.app
+    'http://localhost:5173',                 // local dev
+    'http://localhost:4173',                 // local preview build
+  ].filter(Boolean)                          // drop undefined/empty values
+
   app.enableCors({
-    origin: configService.get('FRONTEND_URL') || 'http://localhost:5173',
+    origin: (origin, callback) => {
+      // Allow requests with no origin (Postman, mobile apps, curl)
+      if (!origin) return callback(null, true)
+      if (allowedOrigins.includes(origin)) return callback(null, true)
+      callback(new Error(`CORS: origin "${origin}" is not allowed`))
+    },
     credentials: true,
   });
 
@@ -43,6 +54,7 @@ async function bootstrap() {
   console.log(`========================================`);
   console.log(`  Njugush POS Backend v1.0.0`);
   console.log(`  Running on port ${port}`);
+  console.log(`  Allowed origins: ${allowedOrigins.join(', ')}`);
   console.log(`  API Docs: http://localhost:${port}/api/docs`);
   console.log(`========================================`);
 }
