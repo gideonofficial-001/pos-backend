@@ -48,4 +48,11 @@ export class InvoicesController {
   ) {
     return this.invoicesService.recordPayment(id, Number(amount), req.user.userId);
   }
+
+  @Patch(':id/cancel')
+  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
+  @ApiOperation({ summary: 'Cancel an invoice' })
+  cancel(@Param('id') id: string) {
+    return this.invoicesService.cancel(id);
+  }
 }
