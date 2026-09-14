@@ -201,12 +201,13 @@ export class AuthService {
       data: { lastLoginAt: new Date() },
     });
 
-    // 10. Generate JWT (same payload shape as existing system)
+    // 10. Generate JWT — includes tokenVersion for session invalidation
     const payload = {
       sub: user.id,
       email: user.email,
       role: user.role,
       branchId: user.branchId,
+      tokenVersion: user.tokenVersion,
     };
     const access_token = this.jwtService.sign(payload);
 
@@ -284,6 +285,7 @@ export class AuthService {
       email: user.email,
       role: user.role,
       branchId: user.branchId,
+      tokenVersion: user.tokenVersion,
     };
     const access_token = this.jwtService.sign(payload);
 
@@ -299,6 +301,35 @@ export class AuthService {
     const { password: _, ...userWithoutPassword } = user;
 
     return { access_token, user: userWithoutPassword };
+  }
+
+  async logoutOtherSessions(userId: string, ipAddress: string, userAgent: string) {
+    // Bump tokenVersion — all existing tokens with the old version become invalid
+    const updatedUser = await this.prisma.user.update({
+      where: { id: userId },
+      data: { tokenVersion: { increment: 1 } },
+    });
+
+    // Issue a fresh token with the new version for the current session
+    const payload = {
+      sub: updatedUser.id,
+      email: updatedUser.email,
+      role: updatedUser.role,
+      branchId: updatedUser.branchId,
+      tokenVersion: updatedUser.tokenVersion,
+    };
+    const access_token = this.jwtService.sign(payload);
+
+    await this.auditLogsService.create({
+      userId,
+      action: 'LOGOUT_ALL_SESSIONS',
+      entityType: 'USER',
+      description: 'User revoked all other sessions',
+      ipAddress,
+      userAgent,
+    });
+
+    return { access_token, message: 'All other sessions have been logged out.' };
   }
 
   async logout(
