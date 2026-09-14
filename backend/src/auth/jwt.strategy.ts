@@ -23,12 +23,14 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       include: { branch: true },
     });
 
-    if (!user) {
-      throw new UnauthorizedException('User not found');
-    }
+    if (!user) throw new UnauthorizedException('User not found');
+    if (user.status !== 'ACTIVE') throw new UnauthorizedException('Account is not active');
 
-    if (user.status !== 'ACTIVE') {
-      throw new UnauthorizedException('Account is not active');
+    // ── Session invalidation check ─────────────────────────────────────────
+    // If tokenVersion in JWT doesn't match DB, this session was revoked by
+    // "logout all other sessions". Force the client to re-authenticate.
+    if (payload.tokenVersion !== undefined && payload.tokenVersion !== user.tokenVersion) {
+      throw new UnauthorizedException('Session expired. Please log in again.');
     }
 
     return {
