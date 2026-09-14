@@ -26,7 +26,8 @@ export class SalesService {
   ) {}
 
   async create(createSaleDto: CreateSaleDto, user: any) {
-    const { branchId, type, customerId, items, notes } = createSaleDto;
+    const { branchId, type, customerId, items, notes, payments } =
+      createSaleDto;
 
     if (
       user.role === UserRole.BRANCH_MANAGER &&
@@ -56,6 +57,7 @@ export class SalesService {
           throw new BadRequestException(`Insufficient empty shells for ${inventory.product.name}. Available: ${availableEmpty}`);
         }
       } else if (variant === LpgSaleVariant.REFILL || variant === LpgSaleVariant.COMPLETE_SET || inventory.product.type === ProductType.LPG_CYLINDER) {
+        // Complete sets only validate gas (fullCylinders)
         if ((inventory.fullCylinders ?? 0) < item.quantity) {
           throw new BadRequestException(`Insufficient full cylinders for ${inventory.product.name}. Available: ${inventory.fullCylinders ?? 0}`);
         }
@@ -66,15 +68,20 @@ export class SalesService {
       }
     }
 
+
     // ── 2. CALCULATION ─────────────────────────────────────────────────────
-    let subtotal = 0;       // sum of (unitPrice × qty) before discounts
-    let totalDiscount = 0;  // sum of all per-item discounts
+    let subtotal = 0;
+    let totalDiscount = 0;
     const saleItems: any[] = [];
 
     for (const item of items) {
-      const product = await this.prisma.product.findUnique({ where: { id: item.productId } });
+      const product = await this.prisma.product.findUnique({
+        where: { id: item.productId },
+      });
       const variant = this.resolveVariant(product.type, item.lpgVariant);
 
+      // Determine Retail vs Wholesale Pricing
+      // Casting to 'any' here as a safeguard until your new Prisma schema types generate
       let basePrice = Number(product.price);
       let emptyPrice = Number(product.emptyPrice || 0);
 
@@ -93,13 +100,10 @@ export class SalesService {
       }
 
       const lineSubtotal = unitPrice * item.quantity;
-      // Clamp item discount — can't exceed the line total
       const itemDiscount = Math.min(Number(item.discount || 0), lineSubtotal);
       const lineTotal = lineSubtotal - itemDiscount;
-
       subtotal += lineSubtotal;
       totalDiscount += itemDiscount;
-
       saleItems.push({
         productId: item.productId,
         quantity: item.quantity,
@@ -145,10 +149,11 @@ export class SalesService {
         },
       });
 
-      // Auto-generate invoice for INVOICE type sales
+      // ---- NEW: AUTOMATIC INVOICE GENERATION ----
       if (type === SaleType.INVOICE && customerId) {
         const invCount = await tx.invoice.count();
         const invoiceCode = `INV-${String(invCount + 1).padStart(5, '0')}`;
+        
         await tx.invoice.create({
           data: {
             invoiceCode,
@@ -158,23 +163,30 @@ export class SalesService {
             saleId: newSale.id,
             status: 'PENDING',
             subtotal,
-            discount: totalDiscount,
+            discount: finalDiscount,
             total,
             balance: total,
-            dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-            notes: notes || 'Auto-generated from POS checkout',
-          },
+            dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Default due date 7 days
+            notes: notes || 'Auto-generated from POS checkout'
+          }
         });
       }
+      // -------------------------------------------
 
       for (const item of items) {
-        const product = await tx.product.findUnique({ where: { id: item.productId } });
+        const product = await tx.product.findUnique({
+          where: { id: item.productId },
+        });
         const inventory = await tx.inventory.findUnique({
-          where: { branchId_productId: { branchId, productId: item.productId } },
+          where: {
+            branchId_productId: { branchId, productId: item.productId },
+          },
         });
         const variant = this.resolveVariant(product.type, item.lpgVariant);
 
-        const updateData: any = { totalSold: { increment: item.quantity } };
+        const updateData: any = {
+          totalSold: { increment: item.quantity },
+        };
         let quantityDelta = -item.quantity;
 
         if (product.type === ProductType.LPG_REFILL) {
@@ -195,7 +207,9 @@ export class SalesService {
         }
 
         await tx.inventory.update({
-          where: { branchId_productId: { branchId, productId: item.productId } },
+          where: {
+            branchId_productId: { branchId, productId: item.productId },
+          },
           data: updateData,
         });
 
@@ -222,7 +236,7 @@ export class SalesService {
       description: `Created ${type} sale ${saleCode} for KES ${total.toFixed(2)}${totalDiscount > 0 ? ` (discount: KES ${totalDiscount.toFixed(2)})` : ''}`,
       entityType: 'Sale',
       entityId: sale.id,
-      newValues: { type, total, discount: totalDiscount, items: saleItems },
+      newValues: { type, total, items: saleItems },
     });
 
     await this.prisma.activityFeed.create({
@@ -237,12 +251,15 @@ export class SalesService {
       },
     });
 
+    // NOTIFY ALL ADMINS ABOUT THE INVOICE
     if (type === SaleType.INVOICE) {
       const admins = await this.prisma.user.findMany({
         where: { role: { in: [UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER] } },
         select: { id: true },
       });
+      
       const branch = await this.prisma.branch.findUnique({ where: { id: branchId } });
+
       await Promise.all(
         admins.map((admin) =>
           this.notificationsService.create({
@@ -260,12 +277,24 @@ export class SalesService {
     return sale;
   }
 
-  async findAll(query: { branchId?: string; startDate?: string; endDate?: string; type?: string; search?: string; user?: any; }) {
+  async findAll(query: {
+    branchId?: string;
+    startDate?: string;
+    endDate?: string;
+    type?: string;
+    search?: string;
+    user?: any;
+  }) {
     const { branchId, startDate, endDate, type, search, user } = query;
-    const where: any = { status: { not: 'RETURNED' } };
+    const where: any = {
+      status: { not: 'RETURNED' }
+    };
 
     if (branchId) {
-      if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== branchId) {
+      if (
+        user?.role === UserRole.BRANCH_MANAGER &&
+        user.branchId !== branchId
+      ) {
         throw new ForbiddenException('You can only view your branch sales');
       }
       where.branchId = branchId;
@@ -273,7 +302,9 @@ export class SalesService {
       where.branchId = user.branchId;
     }
 
-    if (startDate && endDate) where.createdAt = { gte: new Date(startDate), lte: new Date(endDate) };
+    if (startDate && endDate) {
+      where.createdAt = { gte: new Date(startDate), lte: new Date(endDate) };
+    }
     if (type) where.type = type;
     if (search) where.saleCode = { contains: search, mode: 'insensitive' };
 
@@ -300,8 +331,12 @@ export class SalesService {
         returns: true,
       },
     });
+
     if (!sale) throw new NotFoundException('Sale not found');
-    if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) {
+    if (
+      user?.role === UserRole.BRANCH_MANAGER &&
+      user.branchId !== sale.branchId
+    ) {
       throw new ForbiddenException('You can only view your branch sales');
     }
     return sale;
@@ -317,8 +352,12 @@ export class SalesService {
         returns: true,
       },
     });
+
     if (!sale) throw new NotFoundException('Sale not found');
-    if (user?.role === UserRole.BRANCH_MANAGER && user.branchId !== sale.branchId) {
+    if (
+      user?.role === UserRole.BRANCH_MANAGER &&
+      user.branchId !== sale.branchId
+    ) {
       throw new ForbiddenException('You can only view your branch sales');
     }
     return sale;
@@ -328,12 +367,20 @@ export class SalesService {
     const now = new Date();
     const targetYear = year || now.getFullYear();
     const targetWeek = week || this.getWeekNumber(now);
+
     const weekStart = this.getWeekStartDate(targetYear, targetWeek);
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekEnd.getDate() + 6);
     weekEnd.setHours(23, 59, 59, 999);
-    const where: any = { createdAt: { gte: weekStart, lte: weekEnd }, status: SaleStatus.COMPLETED };
-    if (user?.role === UserRole.BRANCH_MANAGER) where.branchId = user.branchId;
+
+    const where: any = {
+      createdAt: { gte: weekStart, lte: weekEnd },
+      status: SaleStatus.COMPLETED,
+    };
+    if (user?.role === UserRole.BRANCH_MANAGER) {
+      where.branchId = user.branchId;
+    }
+
     const sales = await this.prisma.sale.findMany({
       where,
       include: {
@@ -343,21 +390,36 @@ export class SalesService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
     const groupedByDate: Record<string, typeof sales> = {};
     sales.forEach((sale) => {
       const date = sale.createdAt.toISOString().split('T')[0];
       if (!groupedByDate[date]) groupedByDate[date] = [];
       groupedByDate[date].push(sale);
     });
-    return { weekStart: weekStart.toISOString().split('T')[0], weekEnd: weekEnd.toISOString().split('T')[0], weekNumber: targetWeek, year: targetYear, totalSales: sales.length, totalAmount: sales.reduce((sum, s) => sum + Number(s.total), 0), groupedByDate, sales };
+
+    return {
+      weekStart: weekStart.toISOString().split('T')[0],
+      weekEnd: weekEnd.toISOString().split('T')[0],
+      weekNumber: targetWeek,
+      year: targetYear,
+      totalSales: sales.length,
+      totalAmount: sales.reduce((sum, s) => sum + Number(s.total), 0),
+      groupedByDate,
+      sales,
+    };
   }
 
   private getWeekNumber(date: Date): number {
-    const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+    const d = new Date(
+      Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()),
+    );
     const dayNum = d.getUTCDay() || 7;
     d.setUTCDate(d.getUTCDate() + 4 - dayNum);
     const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
-    return Math.ceil(((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+    return Math.ceil(
+      ((d.getTime() - yearStart.getTime()) / 86400000 + 1) / 7,
+    );
   }
 
   private getWeekStartDate(year: number, week: number): Date {
@@ -368,7 +430,10 @@ export class SalesService {
     return new Date(firstMonday.getTime() + (week - 1) * 7 * 86400000);
   }
 
-  private resolveVariant(productType: ProductType, requested?: LpgSaleVariant): LpgSaleVariant | null {
+  private resolveVariant(
+    productType: ProductType,
+    requested?: LpgSaleVariant,
+  ): LpgSaleVariant | null {
     if (productType !== ProductType.LPG_REFILL) return null;
     return requested ?? LpgSaleVariant.REFILL;
   }
