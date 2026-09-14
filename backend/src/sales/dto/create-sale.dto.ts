@@ -19,6 +19,12 @@ class SaleItemDto {
   @IsOptional()
   @IsEnum(LpgSaleVariant, { message: 'lpgVariant must be REFILL, EMPTY_SHELL, or COMPLETE_SET' })
   lpgVariant?: LpgSaleVariant;
+
+  @ApiProperty({ required: false, default: 0, description: 'Per-item discount in KES' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  discount?: number;
 }
 
 export class CreateSaleDto {
@@ -28,7 +34,7 @@ export class CreateSaleDto {
   branchId: string;
 
   @ApiProperty({ enum: SaleType })
-  @IsEnum(SaleType, { message: 'Sale type must be CASH or INVOICE' })
+  @IsEnum(SaleType, { message: 'Sale type must be CASH, WHOLESALE or INVOICE' })
   @IsNotEmpty()
   type: SaleType;
 
@@ -60,11 +66,6 @@ export class CreateSaleDto {
   @ValidateNested({ each: true })
   @Type(() => SaleItemDto)
   items: SaleItemDto[];
-
-  @ApiProperty({ required: false, default: 0 })
-  @IsOptional()
-  @IsNumber()
-  discount?: number;
 
   @ApiProperty({ required: false })
   @IsOptional()
