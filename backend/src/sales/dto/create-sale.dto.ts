@@ -12,12 +12,12 @@ class SaleItemDto {
   @ApiProperty()
   @IsNotEmpty()
   @IsNumber()
-  @Min(1, { message: 'Quantity must be at least 1' })
+  @Min(1)
   quantity: number;
 
   @ApiProperty({ enum: LpgSaleVariant, required: false })
   @IsOptional()
-  @IsEnum(LpgSaleVariant, { message: 'lpgVariant must be REFILL, EMPTY_SHELL, or COMPLETE_SET' })
+  @IsEnum(LpgSaleVariant)
   lpgVariant?: LpgSaleVariant;
 
   @ApiProperty({ required: false, default: 0, description: 'Per-item discount in KES' })
@@ -27,14 +27,30 @@ class SaleItemDto {
   discount?: number;
 }
 
+class SalePaymentDto {
+  @ApiProperty({ enum: PaymentProvider })
+  @IsEnum(PaymentProvider)
+  method: PaymentProvider;
+
+  @ApiProperty({ description: 'Amount for this payment method in KES' })
+  @IsNumber()
+  @Min(0)
+  amount: number;
+
+  @ApiProperty({ required: false, description: 'M-Pesa receipt number (MPESA payments only)' })
+  @IsOptional()
+  @IsString()
+  mpesaRef?: string;
+}
+
 export class CreateSaleDto {
   @ApiProperty()
-  @IsNotEmpty({ message: 'Branch ID is required' })
+  @IsNotEmpty()
   @IsString()
   branchId: string;
 
   @ApiProperty({ enum: SaleType })
-  @IsEnum(SaleType, { message: 'Sale type must be CASH, WHOLESALE or INVOICE' })
+  @IsEnum(SaleType)
   @IsNotEmpty()
   type: SaleType;
 
@@ -48,24 +64,18 @@ export class CreateSaleDto {
   @IsString()
   customerName?: string;
 
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  customerPhone?: string;
-
-  @IsOptional()
-  @IsEnum(PaymentProvider)
-  paymentProvider?: PaymentProvider;
-
-  @IsOptional()
-  @IsString()
-  mpesaRef?: string;
-
   @ApiProperty({ type: [SaleItemDto] })
-  @IsArray({ message: 'Items array is required' })
+  @IsArray()
   @ValidateNested({ each: true })
   @Type(() => SaleItemDto)
   items: SaleItemDto[];
+
+  @ApiProperty({ type: [SalePaymentDto], required: false, description: 'Payment breakdown (supports split payments)' })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => SalePaymentDto)
+  payments?: SalePaymentDto[];
 
   @ApiProperty({ required: false })
   @IsOptional()
