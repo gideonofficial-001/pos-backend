@@ -223,6 +223,8 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  tokenVersion  Int  @default(0)   // incremented on "logout all sessions"
+
   @@map("users")
 }
 
@@ -422,8 +424,23 @@ model Sale {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  payments  SalePayment[]
+
   @@map("sales")
 }
+
+model SalePayment {
+  id       String          @id @default(uuid())
+  saleId   String
+  sale     Sale            @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  method   PaymentProvider
+  amount   Decimal         @db.Decimal(10, 2)
+  mpesaRef String?         // receipt number from Safaricom
+  createdAt DateTime       @default(now())
+
+  @@map("sale_payments")
+}
+
 
 model SaleItem {
   id String @id @default(uuid())
