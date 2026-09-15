@@ -163,7 +163,7 @@ export class SalesService {
             saleId: newSale.id,
             status: 'PENDING',
             subtotal,
-            discount: finalDiscount,
+            discount: totalDiscount,
             total,
             balance: total,
             dueDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Default due date 7 days
