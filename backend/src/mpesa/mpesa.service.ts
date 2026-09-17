@@ -69,7 +69,7 @@ export class MpesaService {
           BusinessShortCode: this.shortcode,
           Password: password,
           Timestamp: timestamp,
-          TransactionType: 'CustomerPayBillOnline', // For Till Numbers, use CustomerBuyGoodsOnline
+          TransactionType: 'CustomerPayBillOnline',
           Amount: Math.ceil(amount),
           PartyA: formattedPhone,
           PartyB: this.shortcode,
@@ -83,7 +83,6 @@ export class MpesaService {
 
       const checkoutRequestId = response.data.CheckoutRequestID;
 
-      // Save the pending transaction to the database
       await this.prisma.mpesaTransaction.create({
         data: {
           checkoutRequestId,
@@ -108,7 +107,15 @@ export class MpesaService {
       where: { checkoutRequestId },
     });
     if (!transaction) throw new NotFoundException('Transaction not found');
-    return transaction;
+
+    return {
+      status: transaction.status,
+      receiptNumber: transaction.receiptNumber,
+      customerName: transaction.customerName ?? null,
+      resultDesc: transaction.resultDesc ?? null,
+      amount: transaction.amount,
+      phoneNumber: transaction.phoneNumber,
+    };
   }
 
   async handleCallback(callbackData: any) {
@@ -128,46 +135,52 @@ export class MpesaService {
       return { message: 'Transaction not found in database' };
     }
 
-    // SCENARIO 1: Transaction Failed or Cancelled by User
+    // ── FAILED or CANCELLED by user ────────────────────────────────────────
     if (resultCode !== 0) {
       await this.prisma.mpesaTransaction.update({
         where: { id: transaction.id },
         data: { status: 'FAILED', resultDesc },
       });
-      return { message: 'Processed Failed Transaction' };
+      this.logger.log(`Transaction ${checkoutRequestId} failed: ${resultDesc}`);
+      return { message: 'Processed failed transaction' };
     }
 
-    // SCENARIO 2: Transaction Success
+    // ── SUCCESS ────────────────────────────────────────────────────────────
     const meta = stkCallback.CallbackMetadata?.Item || [];
-    const amountPaid = meta.find((item: any) => item.Name === 'Amount')?.Value;
-    const receiptNumber = meta.find((item: any) => item.Name === 'MpesaReceiptNumber')?.Value;
+    const amountPaid    = meta.find((i: any) => i.Name === 'Amount')?.Value;
+    const receiptNumber = meta.find((i: any) => i.Name === 'MpesaReceiptNumber')?.Value;
 
-    // 1. Update the MpesaTransaction record
+    // Safaricom includes customer name in the metadata in production
+    const firstName  = meta.find((i: any) => i.Name === 'FirstName')?.Value  || '';
+    const middleName = meta.find((i: any) => i.Name === 'MiddleName')?.Value || '';
+    const lastName   = meta.find((i: any) => i.Name === 'LastName')?.Value   || '';
+    const customerName = [firstName, middleName, lastName].filter(Boolean).join(' ').trim() || null;
+
     await this.prisma.mpesaTransaction.update({
       where: { id: transaction.id },
       data: {
         status: 'COMPLETED',
         receiptNumber,
         resultDesc: 'Payment successful',
+        customerName,
       },
     });
 
-    // 2. Automatically Settle the Sale (if linked)
+    // Auto-settle linked sale
     if (transaction.saleId) {
       await this.prisma.sale.update({
         where: { id: transaction.saleId },
-        data: { status: 'COMPLETED' }, // Assuming SaleStatus.COMPLETED
+        data: { status: 'COMPLETED' },
       });
-      this.logger.log(`Sale ${transaction.saleId} automatically marked as PAID via M-Pesa`);
+      this.logger.log(`Sale ${transaction.saleId} marked COMPLETED via M-Pesa`);
     }
 
-    // 3. Automatically Update Invoice (if linked)
+    // Auto-update linked invoice
     if (transaction.invoiceId) {
       const invoice = await this.prisma.invoice.findUnique({ where: { id: transaction.invoiceId } });
       if (invoice) {
-        const newPaid = Number(invoice.amountPaid) + Number(amountPaid);
+        const newPaid    = Number(invoice.amountPaid) + Number(amountPaid);
         const newBalance = Number(invoice.total) - newPaid;
-        
         await this.prisma.invoice.update({
           where: { id: transaction.invoiceId },
           data: {
