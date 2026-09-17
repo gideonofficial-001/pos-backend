@@ -896,7 +896,8 @@ model MpesaTransaction {
   // Link to the specific transaction
   saleId            String?  @unique
   invoiceId         String?
-  
+  customerName      String?
+
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 }
