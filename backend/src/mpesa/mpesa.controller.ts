@@ -1,37 +1,53 @@
-import { Controller, Post, Get, Body, Param, Logger } from '@nestjs/common';
+import { Controller, Post, Get, Body, Param, UseGuards } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { MpesaService } from './mpesa.service';
-import { ApiTags, ApiOperation } from '@nestjs/swagger';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @ApiTags('M-Pesa')
 @Controller('mpesa')
 export class MpesaController {
-  private readonly logger = new Logger(MpesaController.name);
-
   constructor(private readonly mpesaService: MpesaService) {}
 
+  // ✅ Fix 6: STK push and status require a valid JWT — only callback is public
   @Post('stkpush')
-  @ApiOperation({ summary: 'Initiate M-Pesa STK Push' })
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Initiate M-Pesa STK Push (authenticated)' })
   async initiateStkPush(
     @Body('phoneNumber') phoneNumber: string,
-    @Body('amount') amount: number,
-    @Body('saleId') saleId?: string,
-    @Body('invoiceId') invoiceId?: string,
+    @Body('amount')      amount:      number,
+    @Body('saleId')      saleId?:     string,
+    @Body('invoiceId')   invoiceId?:  string,
   ) {
     return this.mpesaService.initiateStkPush(phoneNumber, amount, saleId, invoiceId);
   }
 
-  //  FRONTEND POLLING ENDPOINT
   @Get('status/:checkoutRequestId')
-  @ApiOperation({ summary: 'Check status of an STK Push' })
-  async getTransactionStatus(@Param('checkoutRequestId') checkoutRequestId: string) {
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Poll M-Pesa payment status (authenticated)' })
+  async getTransactionStatus(
+    @Param('checkoutRequestId') checkoutRequestId: string,
+  ) {
     return this.mpesaService.getTransactionStatus(checkoutRequestId);
   }
 
-  //  SAFARICOM WEBHOOK (Must be completely public, no Auth Guards!)
+  // ✅ Manual receipt verification — calls backend so any string can't fake a payment
+  @Post('verify-manual')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Verify a manually entered M-Pesa receipt code (authenticated)' })
+  async verifyManualReceipt(
+    @Body('receiptNumber') receiptNumber: string,
+    @Body('amount')        amount:        number,
+  ) {
+    return this.mpesaService.verifyManualReceipt(receiptNumber, amount);
+  }
+
+  // ✅ Safaricom callback — intentionally public, no JWT guard
   @Post('callback')
-  @ApiOperation({ summary: 'Safaricom Callback Webhook' })
+  @ApiOperation({ summary: 'Safaricom webhook callback (public — Safaricom IP only)' })
   async handleCallback(@Body() callbackData: any) {
-    this.logger.log('Received M-Pesa Callback payload');
     return this.mpesaService.handleCallback(callbackData);
   }
 }
