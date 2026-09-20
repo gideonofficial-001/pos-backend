@@ -87,12 +87,13 @@ export class MpesaService {
 
     const roundedAmount = Math.ceil(amount);
 
-    // ✅ Fix 1: create the DB record FIRST — before calling Safaricom.
-    // If the Safaricom call fails, we still have a FAILED record to audit.
-    // If the DB write fails, we never call Safaricom (no orphaned payment).
+    // ✅ Fix 1: create the DB record FIRST before calling Safaricom.
+    // We use a temp UUID so checkoutRequestId stays non-nullable in the schema.
+    // It gets replaced with the real Safaricom ID immediately after the call.
+    const { randomUUID } = await import('crypto');
     const pendingTx = await this.prisma.mpesaTransaction.create({
       data: {
-        checkoutRequestId: null,   // filled in after Safaricom responds
+        checkoutRequestId: `PENDING_${randomUUID()}`,
         merchantRequestId: null,
         phoneNumber: formattedPhone,
         amount: roundedAmount,
