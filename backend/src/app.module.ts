@@ -21,7 +21,7 @@ import { SettingsModule } from './settings/settings.module';
 import { ActivityFeedModule } from './activity-feed/activity-feed.module';
 import { HealthController } from './health.controller';
 import { MpesaModule } from './mpesa/mpesa.module';
-import { ClosingStockModule } from './closing-stock/Closing-stock.module';
+import { ClosingStockModule } from './closing-stock/closing-stock.module';
 
 @Module({
   imports: [
