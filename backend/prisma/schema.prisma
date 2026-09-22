@@ -339,7 +339,28 @@ model Product {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  closingStockSnapshots ClosingStockSnapshot[] @relation("ProductClosingStock")
+
   @@map("products")
+}
+
+model ClosingStockSnapshot {
+  id        String   @id @default(uuid())
+  branchId  String
+  branch    Branch   @relation("BranchClosingStock", fields: [branchId], references: [id], onDelete: Cascade)
+  date      DateTime @db.Date          // business date (00:00 of that day)
+  productId String
+  product   Product  @relation("ProductClosingStock", fields: [productId], references: [id])
+
+  quantity      Int
+  fullCylinders Int?   // null for non-LPG products
+
+  recordedAt   DateTime @default(now())
+  recordedById String?
+
+  @@unique([branchId, date, productId])
+  @@index([branchId, date])
+  @@map("closing_stock_snapshots")
 }
 
 model Inventory {
@@ -684,6 +705,8 @@ model BranchLocation {
   latitude     Float
   longitude    Float
   radiusMeters Int   @default(500)
+
+  closingStockSnapshots ClosingStockSnapshot[] @relation("BranchClosingStock")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
