@@ -279,8 +279,10 @@ model Branch {
   dailySummaries      DailySalesSummary[]
   refillVerifications RefillVerification[]
   branchClosings      BranchClosing[]
-  branchLocation      BranchLocation?      // NEW: geofence config
-  cylinders           Cylinder[]           // NEW
+  branchLocation      BranchLocation?
+  cylinders           Cylinder[]
+
+  closingStockSnapshots ClosingStockSnapshot[] @relation("BranchClosingStock")
 
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
@@ -705,8 +707,6 @@ model BranchLocation {
   latitude     Float
   longitude    Float
   radiusMeters Int   @default(500)
-
-  closingStockSnapshots ClosingStockSnapshot[] @relation("BranchClosingStock")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
