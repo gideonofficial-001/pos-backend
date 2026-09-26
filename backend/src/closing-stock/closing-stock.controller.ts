@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Body, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Post, Get, Body, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { ClosingStockService } from './closing-stock.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -12,18 +12,6 @@ import { UserRole } from '@prisma/client';
 @ApiBearerAuth()
 export class ClosingStockController {
   constructor(private readonly closingStockService: ClosingStockService) {}
-
-  @Post('snapshot')
-  @Roles(UserRole.SUPER_ADMIN, UserRole.OVERALL_MANAGER, UserRole.BRANCH_MANAGER)
-  @ApiOperation({ summary: 'Record closing stock snapshot for a branch' })
-  async recordSnapshot(
-    @Body('branchId') branchId: string,
-    @Body('date')     dateStr:  string,
-    @Request() req: any,
-  ) {
-    const date = dateStr ? new Date(dateStr) : new Date();
-    return this.closingStockService.recordSnapshot(branchId, date, req.user.userId);
-  }
 
   @Get('dates')
   @ApiOperation({ summary: 'Get list of dates that have snapshots' })
@@ -44,5 +32,13 @@ export class ClosingStockController {
     @Query('date')     dateStr:  string,
   ) {
     return this.closingStockService.getSnapshot(branchId, new Date(dateStr));
+  }
+
+  @Post('trigger-midnight-snapshot')
+  @Roles(UserRole.SUPER_ADMIN)
+  @ApiOperation({ summary: 'Trigger midnight inventory snapshot for all branches (Super Admin only)' })
+  async triggerMidnightSnapshot(@Body('date') dateStr?: string) {
+    const targetDate = dateStr ? new Date(dateStr) : undefined;
+    return this.closingStockService.captureMidnightSnapshot(targetDate);
   }
 }
