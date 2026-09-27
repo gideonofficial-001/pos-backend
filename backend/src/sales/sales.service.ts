@@ -16,6 +16,7 @@ import {
   LpgSaleVariant,
 } from '@prisma/client';
 import { CreateSaleDto } from './dto/create-sale.dto';
+import { TransfersService } from '../transfers/transfers.service';
 
 @Injectable()
 export class SalesService {
@@ -23,6 +24,7 @@ export class SalesService {
     private prisma: PrismaService,
     private auditLogsService: AuditLogsService,
     private notificationsService: NotificationsService,
+    private transfersService: TransfersService,
   ) {}
 
   async create(createSaleDto: CreateSaleDto, user: any) {
@@ -272,6 +274,16 @@ export class SalesService {
           }),
         ),
       );
+    }
+
+    // ── 5. CHECK & AUTO-CANCEL PENDING TRANSFERS IF STOCK IS NOW INSUFFICIENT ──
+    try {
+      await this.transfersService.cancelPendingTransfersWithInsufficientStock(
+        branchId,
+        items.map((i) => i.productId),
+      );
+    } catch (err) {
+      console.error('Failed to auto-cancel pending transfers with insufficient stock:', err);
     }
 
     return sale;
