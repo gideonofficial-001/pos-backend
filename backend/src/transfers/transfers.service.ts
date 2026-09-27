@@ -349,6 +349,8 @@ export class TransfersService {
       });
     }
 
+    await this.cancelPendingTransfersWithInsufficientStock(transfer.fromBranchId, [item.productId]);
+
     return this.findOne(transferId);
   }
 
@@ -420,6 +422,8 @@ export class TransfersService {
       });
     }
 
+    await this.cancelPendingTransfersWithInsufficientStock(transfer.fromBranchId, pending.map(i => i.productId));
+
     return this.findOne(id);
   }
 
@@ -488,5 +492,184 @@ export class TransfersService {
     }
 
     return this.findOne(id);
+  }
+
+  async cancelPendingTransfersWithInsufficientStock(branchId: string, productIds?: string[]) {
+    // 1. Find all active transfers from this branch with PENDING status
+    const pendingTransfers = await this.prisma.transfer.findMany({
+      where: {
+        fromBranchId: branchId,
+        status: TransferStatus.PENDING,
+        ...(productIds && productIds.length > 0
+          ? {
+              items: {
+                some: {
+                  productId: { in: productIds },
+                  status: TransferItemStatus.PENDING,
+                },
+              },
+            }
+          : {}),
+      },
+      include: {
+        items: {
+          include: { product: true },
+        },
+        fromBranch: { select: { id: true, name: true, managerId: true } },
+        toBranch:   { select: { id: true, name: true, managerId: true } },
+      },
+      orderBy: { createdAt: 'asc' }, // FIFO: oldest pending transfers get priority
+    });
+
+    if (pendingTransfers.length === 0) return;
+
+    // 2. Fetch current inventory at this branch for all products in these transfers
+    const affectedProductIds = Array.from(
+      new Set(pendingTransfers.flatMap((t) => t.items.map((i) => i.productId))),
+    );
+
+    const inventories = await this.prisma.inventory.findMany({
+      where: {
+        branchId,
+        productId: { in: affectedProductIds },
+      },
+    });
+
+    // 3. Create a working stock tracker to evaluate transfers sequentially
+    const stockTracker = new Map<
+      string,
+      { quantity: number; fullCylinders: number; emptyCylinders: number }
+    >();
+
+    for (const inv of inventories) {
+      const full = inv.fullCylinders ?? 0;
+      const total = inv.quantity ?? 0;
+      const empties = Math.max(0, total - full);
+      stockTracker.set(inv.productId, {
+        quantity: total,
+        fullCylinders: full,
+        emptyCylinders: empties,
+      });
+    }
+
+    // 4. Check each pending transfer
+    for (const transfer of pendingTransfers) {
+      let isInsufficient = false;
+      let failureReason = '';
+
+      for (const item of transfer.items) {
+        if (item.status !== TransferItemStatus.PENDING) continue;
+
+        const currentStock = stockTracker.get(item.productId) || {
+          quantity: 0,
+          fullCylinders: 0,
+          emptyCylinders: 0,
+        };
+
+        const isLpg = item.product?.isCylinderTracked || item.product?.isLpg;
+
+        if (isLpg) {
+          if (item.lpgComponent === LpgComponent.CYLINDER) {
+            if (currentStock.fullCylinders < item.quantity || currentStock.quantity < item.quantity) {
+              isInsufficient = true;
+              failureReason = `${item.product.name} (Complete Set): requested ${item.quantity}, only ${currentStock.fullCylinders} available`;
+              break;
+            }
+          } else if (item.lpgComponent === LpgComponent.REFILL) {
+            if (currentStock.fullCylinders < item.quantity) {
+              isInsufficient = true;
+              failureReason = `${item.product.name} (Gas Refill): requested ${item.quantity}, only ${currentStock.fullCylinders} available`;
+              break;
+            }
+          } else {
+            // EMPTY_SHELL or standard
+            if (currentStock.emptyCylinders < item.quantity) {
+              isInsufficient = true;
+              failureReason = `${item.product.name} (Empty Shell): requested ${item.quantity}, only ${currentStock.emptyCylinders} available`;
+              break;
+            }
+          }
+        } else {
+          if (currentStock.quantity < item.quantity) {
+            isInsufficient = true;
+            failureReason = `${item.product.name}: requested ${item.quantity}, only ${currentStock.quantity} in stock`;
+            break;
+          }
+        }
+      }
+
+      if (isInsufficient) {
+        // Automatically cancel this transfer
+        await this.prisma.transfer.update({
+          where: { id: transfer.id },
+          data: {
+            status: TransferStatus.CANCELLED,
+            notes: transfer.notes
+              ? `${transfer.notes} | Auto-cancelled: Insufficient stock after sale (${failureReason})`
+              : `Auto-cancelled: Insufficient stock after sale (${failureReason})`,
+          },
+        });
+
+        // Notify destination branch manager
+        if (transfer.toBranch?.managerId) {
+          await this.notificationsService.create({
+            type: 'TRANSFER_CANCELLED',
+            title: 'Transfer Auto-Cancelled',
+            message: `Transfer ${transfer.transferCode} from ${transfer.fromBranch.name} was automatically cancelled due to insufficient stock following a sale.`,
+            userId: transfer.toBranch.managerId,
+            entityId: transfer.id,
+            entityType: 'Transfer',
+          });
+        }
+
+        // Notify source branch manager / creator
+        const requesterId = transfer.requestedById || transfer.fromBranch?.managerId;
+        if (requesterId) {
+          await this.notificationsService.create({
+            type: 'TRANSFER_CANCELLED',
+            title: 'Transfer Auto-Cancelled',
+            message: `Transfer ${transfer.transferCode} to ${transfer.toBranch.name} was automatically cancelled: insufficient stock for ${failureReason}.`,
+            userId: requesterId,
+            entityId: transfer.id,
+            entityType: 'Transfer',
+          });
+        }
+
+        // Log to Activity Feed
+        await this.prisma.activityFeed.create({
+          data: {
+            type: 'TRANSFER_CANCELLED',
+            branchId: transfer.fromBranchId,
+            title: 'Transfer Auto-Cancelled',
+            message: `Transfer ${transfer.transferCode} to ${transfer.toBranch.name} was automatically cancelled due to insufficient stock following a sale (${failureReason}).`,
+            entityId: transfer.id,
+            entityType: 'Transfer',
+            visibleToBranch: true,
+          },
+        });
+      } else {
+        // Reserve stock for this transfer so subsequent pending transfers don't over-allocate
+        for (const item of transfer.items) {
+          if (item.status !== TransferItemStatus.PENDING) continue;
+          const currentStock = stockTracker.get(item.productId);
+          if (currentStock) {
+            const isLpg = item.product?.isCylinderTracked || item.product?.isLpg;
+            if (isLpg) {
+              if (item.lpgComponent === LpgComponent.CYLINDER) {
+                currentStock.fullCylinders -= item.quantity;
+                currentStock.quantity -= item.quantity;
+              } else if (item.lpgComponent === LpgComponent.REFILL) {
+                currentStock.fullCylinders -= item.quantity;
+              } else {
+                currentStock.emptyCylinders -= item.quantity;
+                currentStock.quantity -= item.quantity;
+              }
+            } else {
+              currentStock.quantity -= item.quantity;
+            }
+          }
+        }
+      }
+    }
   }
 }
