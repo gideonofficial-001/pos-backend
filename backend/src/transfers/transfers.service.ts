@@ -149,7 +149,7 @@ export class TransfersService {
     return transfer;
   }
 
-  async findAll(userId: string) {
+  async findAll(userId: string, query?: any) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { role: true, branchId: true },
@@ -159,25 +159,68 @@ export class TransfersService {
 
     const where: any = {};
     if (user.branchId) {
+      if (query?.direction === 'INCOMING') {
+        where.toBranchId = user.branchId;
+      } else if (query?.direction === 'OUTGOING') {
+        where.fromBranchId = user.branchId;
+      } else {
+        where.OR = [
+          { fromBranchId: user.branchId },
+          { toBranchId: user.branchId },
+        ];
+      }
+    }
+
+    if (query?.status) {
+      where.status = query.status;
+    }
+
+    if (query?.branchId && query.branchId !== 'all') {
       where.OR = [
-        { fromBranchId: user.branchId },
-        { toBranchId: user.branchId },
+        { fromBranchId: query.branchId },
+        { toBranchId: query.branchId },
       ];
     }
 
-    return this.prisma.transfer.findMany({
+    if (query?.date) {
+      const startOfDay = new Date(query.date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(query.date);
+      endOfDay.setHours(23, 59, 59, 999);
+      where.createdAt = {
+        gte: startOfDay,
+        lte: endOfDay,
+      };
+    }
+
+    const findOptions: any = {
       where,
       include: {
         fromBranch:  { select: { id: true, name: true } },
         toBranch:    { select: { id: true, name: true } },
         requestedBy: { select: { id: true, firstName: true, lastName: true } },
         items: {
-          include: { product: true }, // 🚀 THE FIX: This sends the full product data (isLpg, isCylinderTracked) to the frontend!
+          include: { product: true },
           orderBy: { createdAt: 'asc' },
         },
       },
       orderBy: { createdAt: 'desc' },
-    });
+    };
+
+    if (query?.limit) {
+      const limit = parseInt(query.limit, 10);
+      if (!isNaN(limit) && limit > 0) {
+        findOptions.take = limit;
+        if (query?.page) {
+          const page = parseInt(query.page, 10);
+          if (!isNaN(page) && page > 0) {
+            findOptions.skip = (page - 1) * limit;
+          }
+        }
+      }
+    }
+
+    return this.prisma.transfer.findMany(findOptions);
   }
 
   async findOne(id: string) {
