@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, Request } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { TransfersService } from './transfers.service';
 import { CreateTransferDto } from './dto/create-transfer.dto';
@@ -22,9 +22,9 @@ export class TransfersController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Get all transfers for the user branch' })
-  findAll(@Request() req) {
-    return this.transfersService.findAll(req.user.userId);
+  @ApiOperation({ summary: 'Get all transfers for the user branch with optional filtering' })
+  findAll(@Request() req, @Query() query: any) {
+    return this.transfersService.findAll(req.user.userId, query);
   }
 
   @Get(':id')
@@ -77,3 +77,4 @@ export class TransfersController {
     return this.transfersService.cancel(id, req.user);
   }
 }
+
